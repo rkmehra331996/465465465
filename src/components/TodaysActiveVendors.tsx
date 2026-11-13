@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  ArrowRightLeft,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -7,19 +8,23 @@ import {
   Copy,
   FileText,
   MessageCircle,
-  Pencil,
   RotateCcw,
-  Search,
+  Trash2,
   X,
 } from 'lucide-react';
 import {
   buildCleanerWhatsAppMessage,
   calcCommission30,
+  formatIndianDate,
+  getIndianDayTag,
   getOrderTotal,
   getPendingCommission,
   toOrderNumberEmoji,
 } from '../lib/api';
+import { ConfirmDialog } from './ConfirmDialog';
+import { IndianDateInput } from './IndianDateInput';
 import { InvoiceModal } from './InvoiceModal';
+import { TransferOrderModal } from './TransferOrderModal';
 import type { Order, PortalConfig, UserPublic } from '../types';
 
 interface TodaysActiveVendorsProps {
@@ -27,7 +32,9 @@ interface TodaysActiveVendorsProps {
   config: PortalConfig;
   currentUser: UserPublic;
   onUpdateOrder: (id: string, patch: Partial<Order>) => Promise<void>;
+  onDeleteOrder: (id: string) => Promise<void>;
   onBulkComplete: (ids: string[]) => Promise<void>;
+  onTransferOrders: (ids: string[], targetUserId: string) => Promise<void>;
   onOpenWhatsAppForCleaner: (cleanerName: string, selectedIds?: string[]) => void;
   onNotify: (msg: string, type?: 'success' | 'error') => void;
 }
@@ -60,7 +67,7 @@ function formatSingleOrderForWhatsApp(order: Order, indexNumber = 1): string {
     `${serial} *${customer}*`,
     ...(order.number ? [`Phone: ${order.number}`] : []),
     `Service: ${order.serviceName} | City: ${order.city}`,
-    ...(order.bookingDate ? [`Date: ${order.bookingDate}`] : []),
+    ...(order.bookingDate ? [`Date: ${formatIndianDate(order.bookingDate)}`] : []),
     ...(order.address ? [`Address: ${order.address}`] : []),
     `Price: ₹${total}${order.extraAmount > 0 ? ` (+₹${order.extraAmount} Extra)` : ''}${
       order.qty ? ` | Qty: ${order.qty}` : ''
@@ -76,67 +83,61 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
   config,
   currentUser,
   onUpdateOrder,
+  onDeleteOrder,
   onBulkComplete,
+  onTransferOrders,
   onOpenWhatsAppForCleaner,
   onNotify,
 }) => {
   const today = useMemo(() => dateOffsetStr(0), []);
-  const yesterday = useMemo(() => dateOffsetStr(-1), []);
   const tomorrow = useMemo(() => dateOffsetStr(1), []);
 
   const [selectedDate, setSelectedDate] = useState<string>(today);
+  const [cleanerFilter, setCleanerFilter] = useState<string>('all');
   const [statusMode, setStatusMode] = useState<'all' | 'active' | 'completed'>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [telecallerFilter, setTelecallerFilter] = useState('all');
   const [collapsedVendors, setCollapsedVendors] = useState<Record<string, boolean>>({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Inline cell editing state
   const [editingCell, setEditingCell] = useState<{ id: string; field: InlineField } | null>(null);
   const [editingValue, setEditingValue] = useState('');
+  const [editingCustomDate, setEditingCustomDate] = useState(false);
 
-  // Full Edit Modal state
-  const [editModalOrder, setEditModalOrder] = useState<Order | null>(null);
-  const [editForm, setEditForm] = useState({
-    name: '',
-    number: '',
-    bookingDate: '',
-    serviceName: '',
-    city: '',
-    cleanerName: '',
-    address: '',
-    qty: '',
-    price: '',
-    extraAmount: '',
-    notes: '',
-  });
-  const [savingModal, setSavingModal] = useState(false);
   const [invoiceOrder, setInvoiceOrder] = useState<Order | null>(null);
+  const [transferTargetIds, setTransferTargetIds] = useState<string[] | null>(null);
+  const [deleteTargetOrder, setDeleteTargetOrder] = useState<Order | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const transferTargetOrders = useMemo(() => {
+    if (!transferTargetIds || transferTargetIds.length === 0) return [];
+    const idSet = new Set(transferTargetIds);
+    return orders.filter((o) => idSet.has(o.id));
+  }, [orders, transferTargetIds]);
 
-  const uniqueTelecallers = useMemo(() => {
-    const map = new Map<string, string>();
+  const cleanerOptions = useMemo(() => {
+    const set = new Set<string>(config.cleaners);
     for (const o of orders) {
-      if (o.createdById && o.createdByName) {
-        map.set(o.createdById, o.createdByName);
+      if (o.cleanerName && o.cleanerName.trim()) {
+        set.add(o.cleanerName.trim());
       }
     }
-    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
-  }, [orders]);
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [config.cleaners, orders]);
 
   const filteredOrders = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
     return orders.filter((o) => {
+      if (!o.bookingDate || !o.bookingDate.trim()) return false;
       if (statusMode === 'active' && o.status !== 'active') return false;
       if (statusMode === 'completed' && o.status !== 'completed') return false;
       if (selectedDate && o.bookingDate !== selectedDate) return false;
-      if (telecallerFilter !== 'all' && o.createdById !== telecallerFilter) return false;
-      if (q) {
-        const hay = `${o.cleanerName} ${o.name} ${o.number} ${o.serviceName} ${o.city} ${o.address} ${o.notes ?? ''}`.toLowerCase();
-        if (!hay.includes(q)) return false;
+      if (
+        cleanerFilter !== 'all' &&
+        (o.cleanerName || '').trim().toLowerCase() !== cleanerFilter.toLowerCase()
+      ) {
+        return false;
       }
       return true;
     });
-  }, [orders, statusMode, selectedDate, telecallerFilter, searchQuery]);
+  }, [orders, statusMode, selectedDate, cleanerFilter]);
 
   const vendorGroups = useMemo(() => {
     const map = new Map<
@@ -171,9 +172,16 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
       };
 
       existing.orders.push(o);
-      existing.totalWork += getOrderTotal(o);
+      if (o.status === 'completed') {
+        existing.totalWork += getOrderTotal(o);
+      }
       existing.pendingComm30 += getPendingCommission(o);
-      if (o.status === 'active') {
+      const isSentAway =
+        Boolean(o.transferredFromId) &&
+        o.transferredFromId === currentUser.id &&
+        o.createdById !== currentUser.id &&
+        currentUser.role !== 'super_admin';
+      if (o.status === 'active' && !isSentAway) {
         existing.activeIds.push(o.id);
       }
       map.set(key, existing);
@@ -210,9 +218,22 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
     }
   };
 
+  const isSentTransferOrder = (order: Order) =>
+    Boolean(order.transferredFromId) &&
+    order.transferredFromId === currentUser.id &&
+    order.createdById !== currentUser.id;
+
+  const isReceivedTransferOrder = (order: Order) =>
+    Boolean(order.transferredFromId || order.transferredFromName) &&
+    order.createdById === currentUser.id;
+
   const startInlineEdit = (order: Order, field: InlineField) => {
+    if (isSentTransferOrder(order) && currentUser.role !== 'super_admin') {
+      return;
+    }
     setEditingCell({ id: order.id, field });
     setEditingValue(String(order[field] ?? ''));
+    setEditingCustomDate(false);
   };
 
   const commitInlineEdit = async (order: Order, overrideValue?: string) => {
@@ -220,6 +241,7 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
     const { field } = editingCell;
     const raw = (overrideValue ?? editingValue).trim();
     setEditingCell(null);
+    setEditingCustomDate(false);
 
     if (field === 'qty') {
       if (!raw) {
@@ -246,48 +268,6 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
     await onUpdateOrder(order.id, { [field]: raw });
   };
 
-  const openEditModal = (order: Order) => {
-    setEditModalOrder(order);
-    setEditForm({
-      name: order.name || '',
-      number: order.number || '',
-      bookingDate: order.bookingDate || '',
-      serviceName: order.serviceName || config.services[0] || '',
-      city: order.city || config.cities[0] || '',
-      cleanerName: order.cleanerName || config.cleaners[0] || '',
-      address: order.address || '',
-      qty: order.qty !== null && order.qty !== undefined ? String(order.qty) : '',
-      price: String(order.price ?? 0),
-      extraAmount: String(order.extraAmount ?? 0),
-      notes: order.notes || '',
-    });
-  };
-
-  const handleSaveModal = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editModalOrder) return;
-    setSavingModal(true);
-    try {
-      const parsedQty = editForm.qty.trim() ? Number(editForm.qty) : null;
-      await onUpdateOrder(editModalOrder.id, {
-        name: editForm.name.trim(),
-        number: editForm.number.trim(),
-        bookingDate: editForm.bookingDate.trim(),
-        serviceName: editForm.serviceName,
-        city: editForm.city,
-        cleanerName: editForm.cleanerName,
-        address: editForm.address.trim(),
-        qty: parsedQty && Number.isFinite(parsedQty) && parsedQty > 0 ? parsedQty : null,
-        price: Math.max(0, Number(editForm.price) || 0),
-        extraAmount: Math.max(0, Number(editForm.extraAmount) || 0),
-        notes: editForm.notes.trim(),
-      });
-      setEditModalOrder(null);
-    } finally {
-      setSavingModal(false);
-    }
-  };
-
   const toggleCollapse = (vendorName: string) => {
     setCollapsedVendors((prev) => ({
       ...prev,
@@ -297,40 +277,43 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
 
   return (
     <div className="space-y-3">
-      {/* Clean Flat Filter Bar */}
+      {/* Clean Flat Filter Bar: Today + Date, Cleaner, All (Processing + Complete) */}
       <div className="flex flex-wrap items-center justify-between gap-2 py-2 border-y border-[#DCE4E0]">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded border border-[#DCE4E0] bg-white overflow-hidden text-xs">
-            {[
-              { label: 'Today', val: today },
-              { label: 'Yesterday', val: yesterday },
-              { label: 'Tomorrow', val: tomorrow },
-              { label: 'All Dates', val: '' },
-            ].map((btn, idx) => (
-              <button
-                key={btn.label}
-                type="button"
-                onClick={() => setSelectedDate(btn.val)}
-                className={`px-2.5 py-1 font-medium cursor-pointer whitespace-nowrap ${
-                  idx > 0 ? 'border-l border-[#DCE4E0]' : ''
-                } ${
-                  selectedDate === btn.val
-                    ? 'bg-red-600 text-white'
-                    : 'bg-white text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                {btn.label}
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            onClick={() => setSelectedDate(today)}
+            className={`px-3 py-1 text-xs font-semibold rounded border cursor-pointer whitespace-nowrap ${
+              selectedDate === today
+                ? 'bg-red-600 text-white border-red-600'
+                : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-slate-50'
+            }`}
+          >
+            Today
+          </button>
 
-          <input
-            type="date"
-            aria-label="Filter by date"
+          <IndianDateInput
+            ariaLabel="Filter by date"
+            title="Select Booking Date (DD/MM/YY)"
             value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="px-2 py-1 text-xs font-mono-num bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
+            onChange={setSelectedDate}
+            allowClear
+            className="min-w-[106px]"
           />
+
+          <select
+            aria-label="Filter by cleaner"
+            value={cleanerFilter}
+            onChange={(e) => setCleanerFilter(e.target.value)}
+            className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
+          >
+            <option value="all">All Cleaners</option>
+            {cleanerOptions.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
 
           <select
             aria-label="Filter status"
@@ -338,38 +321,20 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
             onChange={(e) => setStatusMode(e.target.value as 'all' | 'active' | 'completed')}
             className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
           >
-            <option value="all">All (Active + Done)</option>
-            <option value="active">Active Only</option>
-            <option value="completed">Completed Only</option>
+            <option value="all">All (Processing + Complete)</option>
+            <option value="active">Under Processing</option>
+            <option value="completed">Complete</option>
           </select>
 
-          {uniqueTelecallers.length > 0 && (
-            <select
-              aria-label="Filter by telecaller"
-              value={telecallerFilter}
-              onChange={(e) => setTelecallerFilter(e.target.value)}
-              className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
-            >
-              <option value="all">All Telecallers</option>
-              {uniqueTelecallers.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          )}
-
           {(selectedDate !== today ||
-            statusMode !== 'all' ||
-            searchQuery ||
-            telecallerFilter !== 'all') && (
+            cleanerFilter !== 'all' ||
+            statusMode !== 'all') && (
             <button
               type="button"
               onClick={() => {
                 setSelectedDate(today);
+                setCleanerFilter('all');
                 setStatusMode('all');
-                setSearchQuery('');
-                setTelecallerFilter('all');
               }}
               className="px-2 py-1 text-xs text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 cursor-pointer"
             >
@@ -379,26 +344,15 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search cleaner, customer..."
-              className="pl-7 pr-2.5 py-1 text-xs bg-white border border-[#DCE4E0] rounded w-44 text-slate-700 focus:outline-none focus:border-slate-400"
-            />
-          </div>
-
-          <div className="text-xs font-mono-num text-slate-600">
-            Vendors: <strong className="text-red-700">{vendorGroups.length}</strong> · Orders:{' '}
-            <strong className="text-slate-900">{filteredOrders.length}</strong> · 100%:{' '}
-            <strong className="text-[#075E54]">₹{totalWorkAll.toLocaleString('en-IN')}</strong> · 30%:{' '}
+        <div className="text-xs font-mono-num text-slate-600">
+          Vendors: <strong className="text-red-700">{vendorGroups.length}</strong> · Orders:{' '}
+          <strong className="text-slate-900">{filteredOrders.length}</strong> ·{' '}
+          <span title="Calculated from completed orders only">
+            100%: <strong className="text-[#075E54]">₹{totalWorkAll.toLocaleString('en-IN')}</strong> · 30%:{' '}
             <strong className="text-amber-800">
               ₹{calcCommission30(totalWorkAll).toLocaleString('en-IN')}
             </strong>
-          </div>
+          </span>
         </div>
       </div>
 
@@ -406,10 +360,10 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
       {vendorGroups.length === 0 ? (
         <div className="bg-white border border-[#DCE4E0] rounded-xl p-8 text-center">
           <div className="text-sm font-semibold text-slate-800">
-            No orders found for {selectedDate || 'All Dates'}.
+            No orders found for {selectedDate ? formatIndianDate(selectedDate) : 'All Dates'}.
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Change the date filter above (Today, Tomorrow, Yesterday, or All Dates) to see vendor orders.
+            Change the date, cleaner, or status filter above to see vendor orders.
           </p>
         </div>
       ) : (
@@ -455,10 +409,16 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                     {vendor.city && (
                       <span className="text-xs text-slate-500">· {vendor.city}</span>
                     )}
-                    <span className="text-xs font-mono-num text-slate-700">
+                    <span
+                      title="Calculated from completed orders only"
+                      className="text-xs font-mono-num text-slate-700"
+                    >
                       · 100%: <strong>₹{vendor.totalWork.toLocaleString('en-IN')}</strong>
                     </span>
-                    <span className="text-xs font-mono-num text-amber-800 font-semibold">
+                    <span
+                      title="Calculated from completed orders only"
+                      className="text-xs font-mono-num text-amber-800 font-semibold"
+                    >
                       · 30%: ₹{comm30.toLocaleString('en-IN')}
                     </span>
                   </div>
@@ -526,7 +486,7 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                 {/* Cleaner's Orders Table */}
                 {!isCollapsed && (
                   <div className="overflow-x-auto sheet-scroll">
-                    <table className="w-full text-left border-collapse min-w-[980px]">
+                    <table className="w-full text-left border-collapse min-w-[1060px]">
                       <thead>
                         <tr className="bg-white border-b border-[#DCE4E0] text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                           <th className="py-2 px-2.5 w-10 text-center">No</th>
@@ -538,6 +498,7 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                           <th className="py-2 px-2.5">Address / Note</th>
                           <th className="py-2 px-2 w-12 text-right">Qty</th>
                           <th className="py-2 px-2.5 w-24 text-right">Price</th>
+                          <th className="py-2 px-2.5 w-28">Cleaner</th>
                           <th className="py-2 px-2.5 w-48 text-right">Action</th>
                         </tr>
                       </thead>
@@ -550,19 +511,39 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                           const isRowCopied = copiedKey === rowCopyKey;
 
                           const isCompleted = order.status === 'completed';
+                          const isSentTransfer = isSentTransferOrder(order);
+                          const isReceivedTransfer = isReceivedTransferOrder(order);
+                          const isOtherTransfer =
+                            !isSentTransfer &&
+                            !isReceivedTransfer &&
+                            Boolean(order.transferredFromName);
+
+                          let rowClass = 'hover:bg-[#FAFDFB]';
+                          if (isSentTransfer) {
+                            rowClass =
+                              'bg-purple-100 hover:bg-purple-200/80 text-purple-950 border-l-4 border-l-purple-700';
+                          } else if (isReceivedTransfer) {
+                            rowClass =
+                              'bg-pink-200 hover:bg-pink-300/80 text-pink-950 border-l-4 border-l-pink-700';
+                          } else if (isOtherTransfer) {
+                            rowClass =
+                              'bg-purple-50 hover:bg-purple-100/75 text-purple-950 border-l-4 border-l-purple-500';
+                          } else if (isCompleted) {
+                            rowClass =
+                              'bg-red-100 hover:bg-red-200/75 text-red-950 border-l-4 border-l-red-600';
+                          }
 
                           return (
-                            <tr
-                              key={order.id}
-                              className={`transition-colors ${
-                                isCompleted
-                                  ? 'bg-red-100 hover:bg-red-200/75 text-red-950 border-l-4 border-l-red-600'
-                                  : 'hover:bg-[#FAFDFB]'
-                              }`}
-                            >
+                            <tr key={order.id} className={`transition-colors ${rowClass}`}>
                               <td
                                 className={`py-2 px-2.5 text-center font-mono-num font-semibold ${
-                                  isCompleted ? 'text-red-800' : 'text-slate-500'
+                                  isSentTransfer
+                                    ? 'text-purple-800'
+                                    : isReceivedTransfer
+                                      ? 'text-pink-900'
+                                      : isCompleted
+                                        ? 'text-red-800'
+                                        : 'text-slate-500'
                                 }`}
                               >
                                 {idx + 1}
@@ -571,23 +552,77 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                               <td
                                 onClick={() => !isEditing('bookingDate') && startInlineEdit(order, 'bookingDate')}
                                 className="py-2 px-2.5 font-mono-num text-slate-700 whitespace-nowrap cursor-pointer"
-                                title="Click to edit date"
+                                title="Click to pick Aj / Kal / Parso / Date"
                               >
                                 {isEditing('bookingDate') ? (
-                                  <input
-                                    autoFocus
-                                    type="date"
-                                    value={editingValue}
-                                    onChange={(e) => setEditingValue(e.target.value)}
-                                    onBlur={() => commitInlineEdit(order)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter') commitInlineEdit(order);
-                                      if (e.key === 'Escape') setEditingCell(null);
-                                    }}
-                                    className="w-full px-1 py-0.5 text-xs border border-[#128C7E] rounded bg-white"
-                                  />
+                                  <div
+                                    className="space-y-1 min-w-[152px]"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <div className="grid grid-cols-4 gap-1">
+                                      {[
+                                        { label: 'Aj', date: today },
+                                        { label: 'Kal', date: tomorrow },
+                                        { label: 'Parso', date: dateOffsetStr(2) },
+                                      ].map((opt) => (
+                                        <button
+                                          key={opt.label}
+                                          type="button"
+                                          onClick={() => commitInlineEdit(order, opt.date)}
+                                          className={`px-1 py-0.5 text-[10px] font-semibold rounded border cursor-pointer ${
+                                            order.bookingDate === opt.date
+                                              ? 'bg-[#075E54] text-white border-[#075E54]'
+                                              : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-slate-50'
+                                          }`}
+                                        >
+                                          {opt.label}
+                                        </button>
+                                      ))}
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditingCustomDate(true)}
+                                        className={`px-1 py-0.5 text-[10px] font-semibold rounded border cursor-pointer ${
+                                          editingCustomDate || !getIndianDayTag(order.bookingDate)
+                                            ? 'bg-[#075E54] text-white border-[#075E54]'
+                                            : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-slate-50'
+                                        }`}
+                                      >
+                                        Date
+                                      </button>
+                                    </div>
+                                    {(editingCustomDate || !getIndianDayTag(order.bookingDate)) && (
+                                      <div className="flex items-center gap-1">
+                                        <IndianDateInput
+                                          ariaLabel="Pick custom booking date"
+                                          title="Pick Date (DD/MM/YY)"
+                                          value={editingValue}
+                                          onChange={(val) => {
+                                            if (val) commitInlineEdit(order, val);
+                                          }}
+                                          className="flex-1 border-[#128C7E]"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => setEditingCell(null)}
+                                          aria-label="Close date editor"
+                                          className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+                                        >
+                                          <X className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : order.bookingDate ? (
+                                  <div>
+                                    <span>{formatIndianDate(order.bookingDate)}</span>
+                                    {getIndianDayTag(order.bookingDate) && (
+                                      <span className="ml-1 text-[10px] font-semibold text-[#075E54]">
+                                        ({getIndianDayTag(order.bookingDate)})
+                                      </span>
+                                    )}
+                                  </div>
                                 ) : (
-                                  order.bookingDate || '—'
+                                  '—'
                                 )}
                               </td>
 
@@ -610,7 +645,33 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                                     className="w-full px-1.5 py-0.5 text-xs border border-[#128C7E] rounded bg-white"
                                   />
                                 ) : (
-                                  order.name || (order.isExtraWork ? 'Extra Work' : '—')
+                                  <div>
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <span>
+                                        {order.name || (order.isExtraWork ? 'Extra Work' : '—')}
+                                      </span>
+                                      {isCompleted && (isSentTransfer || isReceivedTransfer || isOtherTransfer) && (
+                                        <span className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[9px] font-semibold uppercase">
+                                          Done
+                                        </span>
+                                      )}
+                                    </div>
+                                    {isSentTransfer && (
+                                      <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-purple-700 text-white text-[10px] font-semibold">
+                                        Sent to {order.createdByName}
+                                      </span>
+                                    )}
+                                    {isReceivedTransfer && order.transferredFromName && (
+                                      <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-pink-700 text-white text-[10px] font-semibold">
+                                        Received from {order.transferredFromName}
+                                      </span>
+                                    )}
+                                    {isOtherTransfer && order.transferredFromName && (
+                                      <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-purple-700 text-white text-[10px] font-semibold">
+                                        {order.transferredFromName} → {order.createdByName}
+                                      </span>
+                                    )}
+                                  </div>
                                 )}
                               </td>
 
@@ -640,22 +701,69 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                               <td
                                 onClick={() => !isEditing('serviceName') && startInlineEdit(order, 'serviceName')}
                                 className="py-2 px-2.5 text-slate-800 cursor-pointer"
-                                title="Click to change service"
+                                title="Click to change or combine services"
                               >
                                 {isEditing('serviceName') ? (
-                                  <select
-                                    autoFocus
-                                    value={editingValue}
-                                    onChange={(e) => commitInlineEdit(order, e.target.value)}
-                                    onBlur={() => commitInlineEdit(order)}
-                                    className="w-full px-1 py-0.5 text-xs border border-[#128C7E] rounded bg-white"
+                                  <div
+                                    className="space-y-1.5 min-w-[180px]"
+                                    onClick={(e) => e.stopPropagation()}
                                   >
-                                    {config.services.map((s) => (
-                                      <option key={s} value={s}>
-                                        {s}
-                                      </option>
-                                    ))}
-                                  </select>
+                                    <div className="flex flex-wrap gap-1">
+                                      {config.services.map((s) => {
+                                        const selectedList = editingValue
+                                          .split('+')
+                                          .map((item) => item.trim())
+                                          .filter(Boolean);
+                                        const isActive = selectedList.some(
+                                          (item) => item.toLowerCase() === s.toLowerCase()
+                                        );
+                                        return (
+                                          <button
+                                            key={s}
+                                            type="button"
+                                            onClick={() => {
+                                              let next = isActive
+                                                ? selectedList.filter(
+                                                    (item) => item.toLowerCase() !== s.toLowerCase()
+                                                  )
+                                                : [...selectedList, s];
+                                              if (next.length === 0) next = [s];
+                                              next.sort(
+                                                (a, b) =>
+                                                  config.services.indexOf(a) -
+                                                  config.services.indexOf(b)
+                                              );
+                                              setEditingValue(next.join(' + '));
+                                            }}
+                                            className={`px-1.5 py-0.5 text-[10px] font-semibold rounded border cursor-pointer ${
+                                              isActive
+                                                ? 'bg-[#075E54] text-white border-[#075E54]'
+                                                : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-slate-50'
+                                            }`}
+                                          >
+                                            {isActive ? '✓ ' : '+ '}
+                                            {s}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => commitInlineEdit(order, editingValue)}
+                                        className="px-2 py-0.5 text-[10px] font-semibold bg-[#128C7E] text-white rounded cursor-pointer"
+                                      >
+                                        Save
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditingCell(null)}
+                                        className="px-1.5 py-0.5 text-[10px] text-slate-500 hover:text-slate-800 cursor-pointer"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  </div>
                                 ) : (
                                   order.serviceName
                                 )}
@@ -770,6 +878,36 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                                 )}
                               </td>
 
+                              <td
+                                onClick={() => !isEditing('cleanerName') && startInlineEdit(order, 'cleanerName')}
+                                className="py-2 px-2.5 font-medium text-[#075E54] cursor-pointer whitespace-nowrap"
+                                title="Click to change or replace cleaner"
+                              >
+                                {isEditing('cleanerName') ? (
+                                  <select
+                                    autoFocus
+                                    value={editingValue}
+                                    onChange={(e) => commitInlineEdit(order, e.target.value)}
+                                    onBlur={() => commitInlineEdit(order)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Escape') setEditingCell(null);
+                                    }}
+                                    className="w-full px-1.5 py-0.5 text-xs border border-[#128C7E] rounded bg-white text-slate-800"
+                                  >
+                                    {cleanerOptions.map((cl) => (
+                                      <option key={cl} value={cl}>
+                                        {cl}
+                                      </option>
+                                    ))}
+                                    {order.cleanerName && !cleanerOptions.includes(order.cleanerName) && (
+                                      <option value={order.cleanerName}>{order.cleanerName}</option>
+                                    )}
+                                  </select>
+                                ) : (
+                                  <span>{order.cleanerName || 'Unassigned'}</span>
+                                )}
+                              </td>
+
                               <td className="py-2 px-2.5 text-right whitespace-nowrap">
                                 <div className="inline-flex items-center gap-1">
                                   <button
@@ -794,16 +932,6 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
 
                                   <button
                                     type="button"
-                                    onClick={() => openEditModal(order)}
-                                    title="Edit full order"
-                                    className="px-2 py-1 text-[11px] font-medium bg-white border border-[#DCE4E0] hover:bg-slate-50 text-slate-700 rounded inline-flex items-center gap-1 cursor-pointer"
-                                  >
-                                    <Pencil className="w-3 h-3 text-slate-500" />
-                                    Edit
-                                  </button>
-
-                                  <button
-                                    type="button"
                                     onClick={() => setInvoiceOrder(order)}
                                     title="Generate Invoice / Bill"
                                     className="px-2 py-1 text-[11px] font-semibold bg-white border border-[#DCE4E0] hover:bg-slate-50 text-[#075E54] rounded inline-flex items-center gap-1 cursor-pointer"
@@ -812,27 +940,55 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                                     Bill
                                   </button>
 
-                                  {order.status === 'active' ? (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        onUpdateOrder(order.id, { status: 'completed' })
-                                      }
-                                      className="px-2 py-1 text-[11px] font-semibold bg-[#128C7E] hover:bg-[#075E54] text-white rounded inline-flex items-center gap-1 cursor-pointer"
-                                    >
-                                      <CheckCircle2 className="w-3 h-3" />
-                                      Done
-                                    </button>
+                                  {!(isSentTransfer && currentUser.role !== 'super_admin') ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => setTransferTargetIds([order.id])}
+                                        title="Transfer order to another telecaller"
+                                        className="px-2 py-1 text-[11px] font-semibold bg-white border border-[#DCE4E0] hover:bg-[#E9F7F0] text-[#075E54] rounded inline-flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <ArrowRightLeft className="w-3 h-3 text-[#075E54]" />
+                                        Transfer
+                                      </button>
+
+                                      {order.status === 'active' ? (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            onUpdateOrder(order.id, { status: 'completed' })
+                                          }
+                                          className="px-2 py-1 text-[11px] font-semibold bg-[#128C7E] hover:bg-[#075E54] text-white rounded inline-flex items-center gap-1 cursor-pointer"
+                                        >
+                                          <CheckCircle2 className="w-3 h-3" />
+                                          Done
+                                        </button>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            onUpdateOrder(order.id, { status: 'active' })
+                                          }
+                                          className="px-2 py-1 text-[11px] font-medium bg-white border border-[#DCE4E0] hover:bg-slate-50 text-slate-700 rounded cursor-pointer"
+                                        >
+                                          Reopen
+                                        </button>
+                                      )}
+
+                                      <button
+                                        type="button"
+                                        onClick={() => setDeleteTargetOrder(order)}
+                                        title="Delete order"
+                                        className="px-2 py-1 text-[11px] font-semibold bg-white border border-red-200 hover:bg-red-50 text-red-600 rounded inline-flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                        Delete
+                                      </button>
+                                    </>
                                   ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        onUpdateOrder(order.id, { status: 'active' })
-                                      }
-                                      className="px-2 py-1 text-[11px] font-medium bg-white border border-[#DCE4E0] hover:bg-slate-50 text-slate-700 rounded cursor-pointer"
-                                    >
-                                      Reopen
-                                    </button>
+                                    <span className="px-2 py-1 text-[11px] font-semibold bg-purple-700 text-white rounded">
+                                      Sent ({order.createdByName})
+                                    </span>
                                   )}
                                 </div>
                               </td>
@@ -849,204 +1005,45 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
         </div>
       )}
 
-      {/* Clean Edit Order Modal */}
-      {editModalOrder && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 bg-slate-900/45 flex items-center justify-center p-4"
-          onClick={() => setEditModalOrder(null)}
-        >
-          <div
-            className="bg-white border border-[#DCE4E0] rounded-xl w-full max-w-lg overflow-hidden shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-4 py-3 bg-[#075E54] text-white flex items-center justify-between">
-              <h3 className="font-display text-sm font-bold">
-                Edit Order — {editModalOrder.name || editModalOrder.number}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setEditModalOrder(null)}
-                aria-label="Close edit modal"
-                className="p-1 hover:bg-white/15 rounded cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveModal} className="p-4 space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">City</label>
-                  <select
-                    value={editForm.city}
-                    onChange={(e) => setEditForm((f) => ({ ...f, city: e.target.value }))}
-                    className="w-full px-2.5 py-1.5 border border-[#DCE4E0] rounded bg-[#F7F9F8] focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  >
-                    {config.cities.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                    {!config.cities.includes(editForm.city) && editForm.city && (
-                      <option value={editForm.city}>{editForm.city}</option>
-                    )}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Phone Number</label>
-                  <input
-                    type="text"
-                    required
-                    value={editForm.number}
-                    onChange={(e) => setEditForm((f) => ({ ...f, number: e.target.value }))}
-                    className="w-full px-2.5 py-1.5 font-mono-num border border-[#DCE4E0] rounded bg-[#F7F9F8] focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Customer Name</label>
-                  <input
-                    type="text"
-                    value={editForm.name}
-                    onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
-                    className="w-full px-2.5 py-1.5 border border-[#DCE4E0] rounded bg-[#F7F9F8] focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Service</label>
-                  <select
-                    value={editForm.serviceName}
-                    onChange={(e) => setEditForm((f) => ({ ...f, serviceName: e.target.value }))}
-                    className="w-full px-2.5 py-1.5 border border-[#DCE4E0] rounded bg-[#F7F9F8] focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  >
-                    {config.services.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                    {!config.services.includes(editForm.serviceName) && editForm.serviceName && (
-                      <option value={editForm.serviceName}>{editForm.serviceName}</option>
-                    )}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Address</label>
-                <input
-                  type="text"
-                  value={editForm.address}
-                  onChange={(e) => setEditForm((f) => ({ ...f, address: e.target.value }))}
-                  className="w-full px-2.5 py-1.5 border border-[#DCE4E0] rounded bg-[#F7F9F8] focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Qty</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={editForm.qty}
-                    onChange={(e) => setEditForm((f) => ({ ...f, qty: e.target.value }))}
-                    className="w-full px-2.5 py-1.5 font-mono-num border border-[#DCE4E0] rounded bg-[#F7F9F8] focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Price (₹)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={editForm.price}
-                    onChange={(e) => setEditForm((f) => ({ ...f, price: e.target.value }))}
-                    className="w-full px-2.5 py-1.5 font-mono-num border border-[#DCE4E0] rounded bg-[#F7F9F8] focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Extra Work (₹)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={editForm.extraAmount}
-                    onChange={(e) => setEditForm((f) => ({ ...f, extraAmount: e.target.value }))}
-                    className="w-full px-2.5 py-1.5 font-mono-num border border-[#DCE4E0] rounded bg-[#F7F9F8] focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Booking Date</label>
-                  <input
-                    type="date"
-                    value={editForm.bookingDate}
-                    onChange={(e) => setEditForm((f) => ({ ...f, bookingDate: e.target.value }))}
-                    className="w-full px-2.5 py-1.5 font-mono-num border border-[#DCE4E0] rounded bg-[#F7F9F8] focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Assign Cleaner</label>
-                  <select
-                    value={editForm.cleanerName}
-                    onChange={(e) => setEditForm((f) => ({ ...f, cleanerName: e.target.value }))}
-                    className="w-full px-2.5 py-1.5 border border-[#DCE4E0] rounded bg-[#F7F9F8] focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  >
-                    {config.cleaners.map((cl) => (
-                      <option key={cl} value={cl}>
-                        {cl}
-                      </option>
-                    ))}
-                    {!config.cleaners.includes(editForm.cleanerName) && editForm.cleanerName && (
-                      <option value={editForm.cleanerName}>{editForm.cleanerName}</option>
-                    )}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Message / Note</label>
-                <input
-                  type="text"
-                  value={editForm.notes}
-                  onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))}
-                  className="w-full px-2.5 py-1.5 border border-[#DCE4E0] rounded bg-[#F7F9F8] focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#DCE4E0]">
-                <button
-                  type="button"
-                  onClick={() => setEditModalOrder(null)}
-                  className="px-3 py-1.5 border border-[#DCE4E0] rounded-lg text-slate-700 hover:bg-slate-50 cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={savingModal}
-                  className="px-4 py-1.5 bg-[#128C7E] hover:bg-[#075E54] disabled:opacity-50 text-white font-semibold rounded-lg cursor-pointer"
-                >
-                  {savingModal ? 'Saving...' : 'Save Changes'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
       {/* Auto Bill & Invoice Modal */}
       <InvoiceModal
         order={invoiceOrder}
         onClose={() => setInvoiceOrder(null)}
         onNotify={onNotify}
+      />
+
+      {/* Pass Order to Another Telecaller Modal */}
+      <TransferOrderModal
+        ordersToTransfer={transferTargetOrders}
+        staffMembers={config.telecallers || []}
+        currentUser={currentUser}
+        onClose={() => setTransferTargetIds(null)}
+        onTransfer={onTransferOrders}
+      />
+
+      {/* Delete Yes / No Confirmation Popup */}
+      <ConfirmDialog
+        open={Boolean(deleteTargetOrder)}
+        title="Delete this order?"
+        message={
+          deleteTargetOrder
+            ? `Are you sure you want to delete booking for ${deleteTargetOrder.name || deleteTargetOrder.number} (${deleteTargetOrder.serviceName} - ₹${deleteTargetOrder.price})?`
+            : ''
+        }
+        confirmLabel="Yes, Delete"
+        cancelLabel="No, Keep"
+        loading={deleting}
+        onCancel={() => setDeleteTargetOrder(null)}
+        onConfirm={async () => {
+          if (!deleteTargetOrder) return;
+          setDeleting(true);
+          try {
+            await onDeleteOrder(deleteTargetOrder.id);
+            setDeleteTargetOrder(null);
+          } finally {
+            setDeleting(false);
+          }
+        }}
       />
     </div>
   );

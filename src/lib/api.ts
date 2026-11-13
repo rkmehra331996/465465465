@@ -232,6 +232,20 @@ export async function bulkImportOrders(payload: {
   });
 }
 
+export async function transferOrders(
+  ids: string[],
+  targetUserId: string
+): Promise<{
+  ok: boolean;
+  targetUser: { id: string; name: string };
+  orders: Order[];
+}> {
+  return apiFetch('/api/orders/transfer', {
+    method: 'POST',
+    body: JSON.stringify({ ids, targetUserId }),
+  });
+}
+
 export interface HostingerConfigInput {
   mode: 'none' | 'mysql' | 'webhook';
   autoSync: boolean;
@@ -409,7 +423,7 @@ export function buildClientConfirmationMessage(order: Order): string {
     '',
     `*Service:* ${order.serviceName}`,
     `*City:* ${order.city}`,
-    ...(order.bookingDate ? [`*Booking Date:* ${order.bookingDate}`] : []),
+    ...(order.bookingDate ? [`*Booking Date:* ${formatIndianDate(order.bookingDate)}`] : []),
     ...(order.address ? [`*Address:* ${order.address}`] : []),
     ...(order.qty ? [`*Qty:* ${order.qty}`] : []),
     `*Amount:* ₹${order.price}`,
@@ -451,7 +465,8 @@ export function buildCleanerWhatsAppMessage(
     const serialEmoji = toOrderNumberEmoji(idx + 1);
     const customerLabel = order.name || (order.isExtraWork ? 'Extra / On-Site Work' : 'Customer');
     const qtyPart = order.qty ? ` | Qty: ${order.qty}` : '';
-    const datePart = order.bookingDate ? `Date: ${order.bookingDate} | ` : '';
+    const indianDate = order.bookingDate ? formatIndianDate(order.bookingDate) : '';
+    const datePart = indianDate ? `Date: ${indianDate} | ` : '';
     const addrPart = [order.address, order.city].filter(Boolean).join(', ');
     const orderTotal = getOrderTotal(order);
     const extraPart = order.extraAmount > 0 ? ` (+₹${order.extraAmount} Extra)` : '';
@@ -468,7 +483,7 @@ export function buildCleanerWhatsAppMessage(
         `${serialEmoji} *Customer:* ${customerLabel}`,
         ...(order.number ? [`Phone: ${order.number}`] : []),
         `Service: ${order.serviceName} | City: ${order.city}`,
-        ...(order.bookingDate ? [`Booking Date: ${order.bookingDate}`] : []),
+        ...(indianDate ? [`Booking Date: ${indianDate}`] : []),
         ...(order.address ? [`Address: ${order.address}`] : []),
         `Price: ₹${orderTotal}${extraPart}${qtyPart}`,
         ...(order.notes ? [`Message: ${order.notes}`] : []),
@@ -542,3 +557,29 @@ export function exportOrdersToCsv(orders: Order[], filename: string): void {
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
+
+export function getLocalDateStr(offsetDays = 0): string {
+  const d = new Date(Date.now() + offsetDays * 86400000);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function formatIndianDate(dateStr?: string): string {
+  if (!dateStr) return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
+  if (m) {
+    return `${m[3]}/${m[2]}/${m[1].slice(-2)}`;
+  }
+  return dateStr;
+}
+
+export function getIndianDayTag(dateStr?: string): 'Aj' | 'Kal' | 'Parso' | null {
+  if (!dateStr) return null;
+  if (dateStr === getLocalDateStr(0)) return 'Aj';
+  if (dateStr === getLocalDateStr(1)) return 'Kal';
+  if (dateStr === getLocalDateStr(2)) return 'Parso';
+  return null;
+}
+

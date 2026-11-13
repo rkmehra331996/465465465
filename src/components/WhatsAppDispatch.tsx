@@ -10,9 +10,11 @@ import {
 } from 'lucide-react';
 import {
   buildCleanerWhatsAppMessage,
+  formatIndianDate,
   toOrderNumberEmoji,
   translateMessage,
 } from '../lib/api';
+import { IndianDateInput } from './IndianDateInput';
 import type { Order, TranslateTarget } from '../types';
 
 interface WhatsAppDispatchProps {
@@ -67,7 +69,7 @@ export const WhatsAppDispatch: React.FC<WhatsAppDispatchProps> = ({
     initialCleaner || cleanerSummaries[0]?.name || 'all'
   );
   const [dateFilter, setDateFilter] = useState<string>('');
-  const [compactMode, setCompactMode] = useState<boolean>(true);
+  const [compactMode, setCompactMode] = useState<boolean>(false);
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [targetLang, setTargetLang] = useState<TranslateTarget>('english');
   const [messageText, setMessageText] = useState<string>('');
@@ -249,11 +251,13 @@ export const WhatsAppDispatch: React.FC<WhatsAppDispatchProps> = ({
               <label className="block text-xs font-semibold text-slate-700 mb-1">
                 Filter by Date (Optional)
               </label>
-              <input
-                type="date"
+              <IndianDateInput
+                ariaLabel="Filter by booking date"
+                title="Filter by Date (DD/MM/YY)"
                 value={dateFilter}
-                onChange={(e) => setDateFilter(e.target.value)}
-                className="w-full px-2.5 py-1.5 text-xs font-mono-num bg-white border border-[#DCE4E0] rounded-lg focus:outline-none focus:border-[#128C7E]"
+                onChange={setDateFilter}
+                allowClear
+                className="w-full py-0.5 rounded-lg"
               />
             </div>
 
@@ -342,7 +346,7 @@ export const WhatsAppDispatch: React.FC<WhatsAppDispatchProps> = ({
                         </div>
                         <div className="text-slate-500 font-mono-num mt-0.5">
                           {o.number} · {o.city}
-                          {o.bookingDate ? ` · ${o.bookingDate}` : ''}
+                          {o.bookingDate ? ` · ${formatIndianDate(o.bookingDate)}` : ''}
                           {o.qty ? ` · Qty: ${o.qty}` : ''}
                         </div>
                         {o.address && (

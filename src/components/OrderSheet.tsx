@@ -1,29 +1,35 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowRightLeft,
+  Check,
   CheckCircle2,
+  Copy,
   Download,
   FileText,
   MessageCircle,
   Plus,
   RotateCcw,
   Search,
-  Send,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react';
 import {
   calcCommission30,
   checkDuplicateNumber,
+  formatIndianDate,
+  getIndianDayTag,
   getOrderTotal,
   getPaidCommission,
   getPendingCommission,
 } from '../lib/api';
 import { exportOrdersToExcel } from '../lib/excel';
-import { ClientConfirmModal } from './ClientConfirmModal';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ExcelImportModal } from './ExcelImportModal';
+import { IndianDateInput } from './IndianDateInput';
 import { InvoiceModal } from './InvoiceModal';
+import { TransferOrderModal } from './TransferOrderModal';
 import type {
   BulkImportOrderRow,
   DuplicateOrderMatch,
@@ -49,8 +55,11 @@ interface OrderSheetProps {
     autoAddDropdowns: boolean;
     skipDuplicateNumbers: boolean;
   }) => Promise<void>;
+  onTransferOrders: (ids: string[], targetUserId: string) => Promise<void>;
   onOpenWhatsAppForCleaner: (cleanerName: string, selectedIds?: string[]) => void;
   onNotify: (msg: string, type?: 'success' | 'error') => void;
+  newOrderOpen?: boolean;
+  onNewOrderOpenChange?: (open: boolean) => void;
 }
 
 type EditableField =
@@ -93,22 +102,37 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   onDeleteOrder,
   onBulkComplete,
   onBulkImport,
+  onTransferOrders,
   onOpenWhatsAppForCleaner,
   onNotify,
+  newOrderOpen: controlledNewOrderOpen,
+  onNewOrderOpenChange,
 }) => {
-  // Left-side New Order entry state
+  // New Order entry modal state
   const [newCity, setNewCity] = useState(config.cities[0] || 'Patiala');
   const [newNumber, setNewNumber] = useState('');
   const [newName, setNewName] = useState('');
-  const [newService, setNewService] = useState(config.services[0] || 'Water tank');
+  const [newServices, setNewServices] = useState<string[]>([
+    config.services[0] || 'Water tank',
+  ]);
   const [newAddress, setNewAddress] = useState('');
   const [newQty, setNewQty] = useState('');
   const [tankCounts, setTankCounts] = useState<Record<string, number>>({});
   const [newPrice, setNewPrice] = useState('');
   const [newDate, setNewDate] = useState(() => todayStr(1));
+  const [customDateOpen, setCustomDateOpen] = useState(false);
   const [newCleaner, setNewCleaner] = useState(config.cleaners[0] || 'Jagdish');
   const [newNotes, setNewNotes] = useState('');
   const [adding, setAdding] = useState(false);
+  const [internalNewOrderOpen, setInternalNewOrderOpen] = useState(false);
+  const newOrderOpen = controlledNewOrderOpen ?? internalNewOrderOpen;
+  const setNewOrderOpen = (open: boolean) => {
+    if (onNewOrderOpenChange) {
+      onNewOrderOpenChange(open);
+    } else {
+      setInternalNewOrderOpen(open);
+    }
+  };
 
   // Live duplicate phone check across all telecallers
   const [duplicateMatches, setDuplicateMatches] = useState<DuplicateOrderMatch[]>([]);
@@ -127,6 +151,15 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       setNewCleaner(config.cleaners[0]);
     }
   }, [config.cleaners]);
+
+  useEffect(() => {
+    if (config.services.length > 0) {
+      setNewServices((prev) => {
+        const valid = prev.filter((s) => config.services.includes(s));
+        return valid.length > 0 ? valid : [config.services[0]];
+      });
+    }
+  }, [config.services]);
 
   useEffect(() => {
     if (mode !== 'active') return;
@@ -179,12 +212,13 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   // Inline editing state
   const [editingCell, setEditingCell] = useState<{ id: string; field: EditableField } | null>(null);
   const [editingValue, setEditingValue] = useState<string>('');
+  const [editingCustomDate, setEditingCustomDate] = useState<boolean>(false);
 
   // Row selection
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
-  // Client WhatsApp confirmation modal target
-  const [confirmOrder, setConfirmOrder] = useState<Order | null>(null);
+  // Copied order feedback
+  const [copiedOrderId, setCopiedOrderId] = useState<string | null>(null);
 
   // Delete Yes/No confirmation modal target
   const [deleteTargetOrder, setDeleteTargetOrder] = useState<Order | null>(null);
@@ -195,6 +229,14 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
 
   // Auto Bill / Invoice modal target
   const [invoiceOrder, setInvoiceOrder] = useState<Order | null>(null);
+
+  // Pass / Transfer Order modal targets
+  const [transferTargetIds, setTransferTargetIds] = useState<string[] | null>(null);
+  const transferTargetOrders = useMemo(() => {
+    if (!transferTargetIds || transferTargetIds.length === 0) return [];
+    const idSet = new Set(transferTargetIds);
+    return orders.filter((o) => idSet.has(o.id));
+  }, [orders, transferTargetIds]);
 
   const modeOrders = useMemo(
     () => orders.filter((o) => o.status === mode),
@@ -232,7 +274,13 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       if (cityFilter !== 'all' && o.city.toLowerCase() !== cityFilter.toLowerCase()) {
         return false;
       }
-      if (serviceFilter !== 'all' && o.serviceName.toLowerCase() !== serviceFilter.toLowerCase()) {
+      if (
+        serviceFilter !== 'all' &&
+        !o.serviceName
+          .split('+')
+          .map((s) => s.trim().toLowerCase())
+          .includes(serviceFilter.toLowerCase())
+      ) {
         return false;
       }
       if (telecallerFilter !== 'all' && o.createdById !== telecallerFilter) {
@@ -393,28 +441,48 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
     });
   };
 
+  const toggleNewService = (service: string) => {
+    setNewServices((prev) => {
+      const exists = prev.includes(service);
+      if (exists) {
+        if (prev.length === 1) return prev;
+        return prev.filter((s) => s !== service);
+      }
+      const next = [...prev, service];
+      return next.sort(
+        (a, b) => config.services.indexOf(a) - config.services.indexOf(b)
+      );
+    });
+  };
+
   const submitOrderEntry = async () => {
     setAdding(true);
     try {
-      const isWaterTank = newService.toLowerCase() === 'water tank';
+      const hasWaterTank = newServices.some((s) => s.toLowerCase() === 'water tank');
       const parsedManualQty = newQty.trim() ? Number(newQty) : null;
-      const finalQty =
-        isWaterTank && tankSummary.totalTanks > 0
-          ? tankSummary.totalTanks
-          : parsedManualQty && Number.isFinite(parsedManualQty) && parsedManualQty > 0
+      const manualQtyVal =
+        parsedManualQty && Number.isFinite(parsedManualQty) && parsedManualQty > 0
           ? parsedManualQty
-          : null;
+          : 0;
+      const tankQtyVal = hasWaterTank ? tankSummary.totalTanks : 0;
+      const combinedQty = tankQtyVal + manualQtyVal;
+      const finalQty = combinedQty > 0 ? combinedQty : null;
 
       const noteParts = [
-        isWaterTank && tankSummary.text ? tankSummary.text : '',
+        hasWaterTank && tankSummary.text ? tankSummary.text : '',
         newNotes.trim(),
       ].filter(Boolean);
+
+      const finalServiceName =
+        newServices.length > 0
+          ? newServices.join(' + ')
+          : config.services[0] || 'Water tank';
 
       await onAddOrder({
         name: newName.trim(),
         number: newNumber.trim(),
         bookingDate: newDate.trim(),
-        serviceName: newService,
+        serviceName: finalServiceName,
         city: newCity,
         address: newAddress.trim(),
         qty: finalQty,
@@ -425,14 +493,17 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
 
       setNewName('');
       setNewNumber('');
+      setNewServices([config.services[0] || 'Water tank']);
       setNewAddress('');
       setNewQty('');
       setTankCounts({});
       setNewPrice('');
       setNewDate(todayStr(1));
+      setCustomDateOpen(false);
       setNewNotes('');
       setDuplicateMatches([]);
       setPendingDuplicateSubmit(false);
+      setNewOrderOpen(false);
       setCurrentPage(1);
     } finally {
       setAdding(false);
@@ -465,9 +536,22 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
     await submitOrderEntry();
   };
 
+  const isSentTransferOrder = (order: Order) =>
+    Boolean(order.transferredFromId) &&
+    order.transferredFromId === currentUser.id &&
+    order.createdById !== currentUser.id;
+
+  const isReceivedTransferOrder = (order: Order) =>
+    Boolean(order.transferredFromId || order.transferredFromName) &&
+    order.createdById === currentUser.id;
+
   const startEdit = (order: Order, field: EditableField) => {
+    if (isSentTransferOrder(order) && currentUser.role !== 'super_admin') {
+      return;
+    }
     setEditingCell({ id: order.id, field });
     setEditingValue(String(order[field] ?? ''));
+    setEditingCustomDate(false);
   };
 
   const commitEdit = async (order: Order, overrideValue?: string) => {
@@ -475,6 +559,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
     const { field } = editingCell;
     const raw = (overrideValue ?? editingValue).trim();
     setEditingCell(null);
+    setEditingCustomDate(false);
 
     if (field === 'qty') {
       if (!raw) {
@@ -562,6 +647,33 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
     onOpenWhatsAppForCleaner(first?.cleanerName || 'Selected Orders', selectedIds);
   };
 
+  const handleCopyOrder = async (order: Order) => {
+    const total = getOrderTotal(order);
+    const lines = [
+      `*Customer:* ${order.name || 'Customer'}`,
+      ...(order.number ? [`Phone: ${order.number}`] : []),
+      ...(order.bookingDate ? [`Booking Date: ${formatIndianDate(order.bookingDate)}`] : []),
+      `Service: ${order.serviceName}${order.qty ? ` | Qty: ${order.qty}` : ''}`,
+      `City: ${order.city}`,
+      ...(order.address ? [`Address: ${order.address}`] : []),
+      `Price: ₹${total.toLocaleString('en-IN')}${
+        order.extraAmount > 0 ? ` (+₹${order.extraAmount} Extra)` : ''
+      }`,
+      `Cleaner: ${order.cleanerName}`,
+      ...(order.notes ? [`Note: ${order.notes}`] : []),
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      setCopiedOrderId(order.id);
+      onNotify('Order details copied!');
+      setTimeout(() => {
+        setCopiedOrderId((curr) => (curr === order.id ? null : curr));
+      }, 1500);
+    } catch {
+      onNotify('Copy failed — please allow clipboard permission', 'error');
+    }
+  };
+
   const startEntryIndex =
     filteredOrders.length === 0
       ? 0
@@ -572,399 +684,49 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       : Math.min(filteredOrders.length, safePage * showEntries);
 
   const totalCols =
-    13 +
+    12 +
     (currentUser.role === 'super_admin' ? 1 : 0) +
     (mode === 'completed' ? 2 : 0);
 
-  const isWaterTankSelected = newService.toLowerCase() === 'water tank';
+  const hasWaterTankSelected = newServices.some((s) => s.toLowerCase() === 'water tank');
+  const hasOtherServiceSelected = newServices.some((s) => s.toLowerCase() !== 'water tank');
 
   return (
-    <div
-      className={
-        mode === 'active'
-          ? 'flex flex-col lg:flex-row gap-5 items-start'
-          : 'space-y-4'
-      }
-    >
-      {mode === 'active' && (
-        <aside className="w-full lg:w-[395px] xl:w-[415px] shrink-0 bg-white border border-[#DCE4E0] rounded-xl overflow-hidden">
-          <div className="px-4 py-3 bg-[#075E54] text-white flex items-center justify-between">
-            <h2 className="font-display text-sm font-bold">New Order</h2>
-            <span className="text-[11px] text-white/80 font-mono-num">
-              {newDate === todayStr(1) ? 'Next Day Selected' : newDate || 'No Date'}
-            </span>
-          </div>
-
-          <form onSubmit={handleQuickAdd} className="p-4 space-y-3">
-            {/* Row 1: Left City Name | Right Phone Number */}
-            <div className="grid grid-cols-2 gap-2.5">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  City Name
-                </label>
-                <select
-                  value={newCity}
-                  onChange={(e) => setNewCity(e.target.value)}
-                  className="w-full px-2.5 py-2 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                >
-                  {config.cities.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Phone Number <span className="text-red-600">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={newNumber}
-                  onChange={(e) => setNewNumber(e.target.value)}
-                  placeholder="10-digit number"
-                  className={`w-full px-2.5 py-2 text-sm font-mono-num border rounded-lg focus:bg-white focus:outline-none ${
-                    duplicateMatches.some((m) => m.status === 'active')
-                      ? 'bg-red-50 border-red-400 focus:border-red-500'
-                      : duplicateMatches.length > 0
-                      ? 'bg-amber-50 border-amber-400 focus:border-amber-500'
-                      : 'bg-[#F7F9F8] border-[#DCE4E0] focus:border-[#128C7E]'
-                  }`}
-                />
-              </div>
-            </div>
-
-            {/* Live Telecaller Duplicate Number Alert */}
-            {checkingDuplicate && (
-              <div className="text-[11px] text-slate-500 px-2.5 py-1.5 bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg">
-                Checking central records for this phone number...
-              </div>
-            )}
-
-            {!checkingDuplicate && duplicateMatches.length > 0 && (
-              <div
-                role="alert"
-                className={`rounded-lg border p-2.5 text-xs space-y-1.5 ${
-                  duplicateMatches.some((m) => m.status === 'active')
-                    ? 'bg-red-50 border-red-300 text-red-950'
-                    : 'bg-amber-50 border-amber-300 text-amber-950'
-                }`}
-              >
-                <div className="flex items-center gap-1.5 font-bold">
-                  <AlertTriangle
-                    className={`w-4 h-4 shrink-0 ${
-                      duplicateMatches.some((m) => m.status === 'active')
-                        ? 'text-red-600'
-                        : 'text-amber-600'
-                    }`}
-                  />
-                  <span>
-                    {duplicateMatches.some((m) => m.status === 'active')
-                      ? `Order Already Taken! (${duplicateMatches.length} match)`
-                      : `Previous Order History (${duplicateMatches.length})`}
-                  </span>
-                </div>
-
-                <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                  {duplicateMatches.slice(0, 4).map((m) => {
-                    const takenDate = m.createdAt
-                      ? new Date(m.createdAt).toLocaleDateString('en-IN', {
-                          day: '2-digit',
-                          month: 'short',
-                          year: 'numeric',
-                        })
-                      : '';
-                    return (
-                      <div
-                        key={m.id}
-                        className="bg-white/90 border border-black/10 rounded p-2 text-[11px] leading-snug"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-bold text-slate-900">
-                            Telecaller: {m.createdByName}
-                            {m.createdById === currentUser.id ? ' (You)' : ''}
-                          </span>
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                              m.status === 'active'
-                                ? 'bg-red-100 text-red-700'
-                                : 'bg-slate-200 text-slate-700'
-                            }`}
-                          >
-                            {m.status}
-                          </span>
-                        </div>
-                        <div className="text-slate-700 mt-0.5">
-                          Name: <strong>{m.name || 'No Name'}</strong> · Booking Date:{' '}
-                          <strong className="font-mono-num">{m.bookingDate || 'No Date'}</strong>
-                        </div>
-                        <div className="text-slate-600 mt-0.5">
-                          {m.serviceName} · {m.city} · ₹{m.price} · Cleaner: {m.cleanerName}
-                        </div>
-                        {m.address && (
-                          <div className="text-slate-500 truncate mt-0.5">Addr: {m.address}</div>
-                        )}
-                        {takenDate && (
-                          <div className="text-[10px] text-slate-400 mt-0.5">
-                            Entered on: {takenDate}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {duplicateMatches.length > 4 && (
-                    <div className="text-[10px] font-medium opacity-80">
-                      +{duplicateMatches.length - 4} more previous order(s) on this number
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Row 2: Left Customer Name | Right Service */}
-            <div className="grid grid-cols-2 gap-2.5">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Customer Name
-                </label>
-                <input
-                  type="text"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="Optional"
-                  className="w-full px-2.5 py-2 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Service
-                </label>
-                <select
-                  value={newService}
-                  onChange={(e) => setNewService(e.target.value)}
-                  className="w-full px-2.5 py-2 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                >
-                  {config.services.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Row 3: Full Address (Full Width) */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Full Address
-              </label>
-              <textarea
-                rows={2}
-                value={newAddress}
-                onChange={(e) => setNewAddress(e.target.value)}
-                placeholder="House no., Sector, Landmark (optional)"
-                className="w-full px-3 py-2 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E] resize-none"
-              />
-            </div>
-
-            {/* Row 4: Quantity (Full Width) */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Quantity {isWaterTankSelected ? '(Tank Size & Count)' : ''}
-              </label>
-
-              {isWaterTankSelected ? (
-                <div className="bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg p-2.5 space-y-2">
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {TANK_TYPES.map((t) => {
-                      const count = tankCounts[t.key] || 0;
-                      return (
-                        <div
-                          key={t.key}
-                          className={`flex items-center justify-between px-2 py-1.5 rounded border text-xs ${
-                            count > 0
-                              ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold'
-                              : 'bg-white border-[#DCE4E0] text-slate-700'
-                          }`}
-                        >
-                          <span className="truncate mr-1">{t.label}</span>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => adjustTankCount(t.key, -1)}
-                              className="w-5 h-5 rounded bg-[#EFF4F1] hover:bg-[#DCE4E0] text-slate-700 font-bold flex items-center justify-center cursor-pointer"
-                            >
-                              -
-                            </button>
-                            <span className="w-4 text-center font-mono-num">{count}</span>
-                            <button
-                              type="button"
-                              onClick={() => adjustTankCount(t.key, 1)}
-                              className="w-5 h-5 rounded bg-[#128C7E] hover:bg-[#075E54] text-white font-bold flex items-center justify-center cursor-pointer"
-                            >
-                              +
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {tankSummary.totalTanks > 0 && (
-                    <div className="text-[11px] text-[#075E54] font-medium pt-1 border-t border-[#DCE4E0]">
-                      Selected ({tankSummary.totalTanks}): {tankSummary.text}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <input
-                  type="number"
-                  min={1}
-                  value={newQty}
-                  onChange={(e) => setNewQty(e.target.value)}
-                  placeholder="Optional (e.g. 1, 2)"
-                  className="w-full px-3 py-2 text-sm font-mono-num bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                />
-              )}
-            </div>
-
-            {/* Row 5: Left Price (₹) | Right Booking Day & Date (Next day auto-selected) */}
-            <div className="grid grid-cols-2 gap-2.5 items-start">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Price (₹)
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  value={newPrice}
-                  onChange={(e) => setNewPrice(e.target.value)}
-                  placeholder="Amount"
-                  className="w-full px-2.5 py-2 text-sm font-mono-num bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Booking Day / Date
-                </label>
-                <input
-                  type="date"
-                  value={newDate}
-                  onChange={(e) => setNewDate(e.target.value)}
-                  className="w-full px-2.5 py-2 text-xs font-mono-num bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                />
-                <div className="grid grid-cols-4 gap-1 mt-1.5">
-                  {[
-                    { label: 'Kal', date: todayStr(1) },
-                    { label: 'Aaj', date: todayStr(0) },
-                    { label: 'Parso', date: todayStr(2) },
-                    { label: 'Yest', date: todayStr(-1) },
-                  ].map((opt) => (
-                    <button
-                      key={opt.label}
-                      type="button"
-                      onClick={() => setNewDate(opt.date)}
-                      className={`py-1 px-0.5 text-[10px] font-medium rounded border cursor-pointer whitespace-nowrap ${
-                        newDate === opt.date
-                          ? 'bg-[#075E54] text-white border-[#075E54]'
-                          : 'bg-[#F7F9F8] text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Row 6: Niche Cleaner (Full Width) */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Assign Cleaner
-              </label>
-              <select
-                value={newCleaner}
-                onChange={(e) => setNewCleaner(e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-              >
-                {config.cleaners.map((cl) => (
-                  <option key={cl} value={cl}>
-                    {cl}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Optional Message / Work Note */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Message / Note (Optional)
-              </label>
-              <input
-                type="text"
-                value={newNotes}
-                onChange={(e) => setNewNotes(e.target.value)}
-                placeholder="Any extra instruction..."
-                className="w-full px-3 py-2 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-              />
-            </div>
-
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={adding}
-              className="w-full py-2.5 px-4 bg-[#128C7E] hover:bg-[#075E54] disabled:opacity-60 text-white text-sm font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              {adding ? 'Adding Order...' : 'Add Order Entry'}
-            </button>
-          </form>
-        </aside>
-      )}
-
-      <div className={mode === 'active' ? 'flex-1 min-w-0 w-full space-y-3' : 'space-y-3'}>
-
-      {/* Simple Flat Filter Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-2.5 py-2 border-y border-[#DCE4E0]">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1.5 text-xs text-slate-600">
-            <span>From</span>
+    <div className="space-y-3 w-full">
+      {/* Single-Line Inline Filter Toolbar: Left Search | Right Date-to-Date, Service, City, Cleaners, Import & Export */}
+      <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-2 py-2 border-y border-[#DCE4E0]">
+        {/* Left: Search Bar, Show entries & Reset */}
+        <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
+          <div className="relative w-full sm:w-52">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
-              type="date"
-              aria-label="From date"
-              value={fromDate}
+              type="text"
+              value={searchQuery}
               onChange={(e) => {
-                setFromDate(e.target.value);
+                setSearchQuery(e.target.value);
                 setCurrentPage(1);
               }}
-              className="px-2 py-1 text-xs font-mono-num bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
+              placeholder="Search name, phone..."
+              className="w-full pl-7 pr-2.5 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-[#128C7E]"
             />
           </div>
 
-          <div className="flex items-center gap-1.5 text-xs text-slate-600">
-            <span>To</span>
-            <input
-              type="date"
-              aria-label="To date"
-              value={toDate}
-              onChange={(e) => {
-                setToDate(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="px-2 py-1 text-xs font-mono-num bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
-            />
-          </div>
-
-          <button
-            type="button"
-            onClick={() => applyDatePreset('today')}
-            className="px-2 py-1 text-xs text-slate-600 hover:text-slate-900 border border-[#DCE4E0] bg-white rounded cursor-pointer whitespace-nowrap"
+          <select
+            aria-label="Show entries"
+            title="Rows per page"
+            value={showEntries}
+            onChange={(e) => {
+              setShowEntries(Number(e.target.value));
+              setCurrentPage(1);
+            }}
+            className="px-1.5 py-1 text-xs font-mono-num bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400 shrink-0"
           >
-            Today
-          </button>
+            <option value={10}>10</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+            <option value={-1}>All</option>
+          </select>
 
           {(fromDate ||
             toDate ||
@@ -989,11 +751,40 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                 setSearchQuery('');
                 setCurrentPage(1);
               }}
-              className="px-2 py-1 text-xs text-slate-500 hover:text-slate-900 underline cursor-pointer whitespace-nowrap"
+              className="px-2 py-1 text-xs text-red-600 hover:text-red-700 font-medium underline cursor-pointer whitespace-nowrap shrink-0"
             >
               Reset
             </button>
           )}
+        </div>
+
+        {/* Right: Inline Date-to-Date, Service, City, Cleaners, Import & Export */}
+        <div className="flex items-center gap-1.5 overflow-x-auto sheet-scroll flex-nowrap min-w-0">
+          <div className="flex items-center gap-1 text-xs text-slate-600 shrink-0">
+            <IndianDateInput
+              ariaLabel="From date"
+              title="From Date (DD/MM/YY)"
+              value={fromDate}
+              onChange={(val) => {
+                setFromDate(val);
+                setCurrentPage(1);
+              }}
+              allowClear
+              className="w-[106px]"
+            />
+            <span className="text-slate-400 text-[11px]">to</span>
+            <IndianDateInput
+              ariaLabel="To date"
+              title="To Date (DD/MM/YY)"
+              value={toDate}
+              onChange={(val) => {
+                setToDate(val);
+                setCurrentPage(1);
+              }}
+              allowClear
+              className="w-[106px]"
+            />
+          </div>
 
           <select
             aria-label="Filter by service"
@@ -1002,9 +793,9 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
               setServiceFilter(e.target.value);
               setCurrentPage(1);
             }}
-            className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
+            className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400 shrink-0"
           >
-            <option value="all">All Services</option>
+            <option value="all">Service</option>
             {config.services.map((s) => (
               <option key={s} value={s}>
                 {s}
@@ -1019,9 +810,9 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
               setCityFilter(e.target.value);
               setCurrentPage(1);
             }}
-            className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
+            className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400 shrink-0"
           >
-            <option value="all">All Cities</option>
+            <option value="all">City</option>
             {config.cities.map((c) => (
               <option key={c} value={c}>
                 {c}
@@ -1036,9 +827,9 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
               setCleanerFilter(e.target.value);
               setCurrentPage(1);
             }}
-            className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
+            className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400 shrink-0"
           >
-            <option value="all">All Cleaners</option>
+            <option value="all">Cleaners</option>
             {config.cleaners.map((c) => (
               <option key={c} value={c}>
                 {c}
@@ -1055,12 +846,12 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                   setTelecallerFilter(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
+                className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400 shrink-0"
               >
-                <option value="all">All Telecallers</option>
+                <option value="all">Telecallers</option>
                 {uniqueTelecallers.map((tc) => (
                   <option key={tc.id} value={tc.id}>
-                    Booked: {tc.name}
+                    {tc.name}
                   </option>
                 ))}
               </select>
@@ -1074,12 +865,12 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                 setCompletedByFilter(e.target.value);
                 setCurrentPage(1);
               }}
-              className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
+              className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400 shrink-0"
             >
-              <option value="all">Done By: All</option>
+              <option value="all">Done By</option>
               {uniqueCompletedBy.map((name) => (
                 <option key={name} value={name}>
-                  Done By: {name}
+                  {name}
                 </option>
               ))}
             </select>
@@ -1093,56 +884,22 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                 setPaymentFilter(e.target.value as 'all' | 'pending' | 'clear');
                 setCurrentPage(1);
               }}
-              className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
+              className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400 shrink-0"
             >
-              <option value="all">All Payments</option>
+              <option value="all">Payments</option>
               <option value="pending">30% Pending</option>
-              <option value="clear">Payment Clear</option>
+              <option value="clear">Clear</option>
             </select>
           )}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1 text-xs text-slate-600">
-            <span>Show</span>
-            <select
-              aria-label="Show entries"
-              value={showEntries}
-              onChange={(e) => {
-                setShowEntries(Number(e.target.value));
-                setCurrentPage(1);
-              }}
-              className="px-1.5 py-1 text-xs font-mono-num bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
-            >
-              <option value={10}>10</option>
-              <option value={25}>25</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={-1}>All</option>
-            </select>
-          </div>
-
-          <div className="relative w-48">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setCurrentPage(1);
-              }}
-              placeholder="Search..."
-              className="w-full pl-7 pr-2.5 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400"
-            />
-          </div>
 
           <button
             type="button"
             onClick={() => setImportModalOpen(true)}
-            className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-slate-50 border border-[#DCE4E0] text-slate-700 rounded flex items-center gap-1 cursor-pointer whitespace-nowrap"
+            title="Import Excel"
+            className="px-2 py-1 text-xs font-medium bg-white hover:bg-slate-50 border border-[#DCE4E0] text-slate-700 rounded inline-flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
           >
             <Upload className="w-3.5 h-3.5 text-[#128C7E]" />
-            Import Excel
+            Import
           </button>
 
           <button
@@ -1153,10 +910,11 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                 `orderdesk-${mode}-${todayStr(0)}.xlsx`
               )
             }
-            className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-slate-50 border border-[#DCE4E0] text-slate-700 rounded flex items-center gap-1 cursor-pointer whitespace-nowrap"
+            title="Export Excel"
+            className="px-2 py-1 text-xs font-medium bg-white hover:bg-slate-50 border border-[#DCE4E0] text-slate-700 rounded inline-flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
           >
             <Download className="w-3.5 h-3.5 text-slate-500" />
-            Export Excel
+            Export
           </button>
         </div>
 
@@ -1182,10 +940,18 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                     className="px-3 py-1 text-xs font-semibold bg-[#128C7E] hover:bg-[#075E54] text-white rounded flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    Mark Complete
+                    Confirm Orders
                   </button>
                 </>
               )}
+              <button
+                type="button"
+                onClick={() => setTransferTargetIds(selectedIds)}
+                className="px-3 py-1 text-xs font-semibold bg-white hover:bg-slate-50 text-[#075E54] border border-[#128C7E] rounded flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <ArrowRightLeft className="w-3.5 h-3.5" />
+                Transfer to Telecaller
+              </button>
               <button
                 type="button"
                 onClick={() => setSelectedIds([])}
@@ -1307,13 +1073,13 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
         </div>
       )}
 
-      {/* Excel-Style Spreadsheet Grid */}
+      {/* Clean Table Matching Today's Active Vendors Style */}
       <div className="bg-white border border-[#DCE4E0] rounded-xl overflow-hidden">
         <div className="overflow-x-auto sheet-scroll">
-          <table className="w-full text-left border-collapse min-w-[1260px]">
+          <table className="w-full text-left border-collapse min-w-[1080px]">
             <thead>
-              <tr className="bg-[#EFF4F1] border-b border-[#DCE4E0] text-xs font-semibold text-slate-700">
-                <th className="py-2.5 px-3 w-10 border-r border-[#DCE4E0] text-center">
+              <tr className="bg-white border-b border-[#DCE4E0] text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                <th className="py-2 px-2.5 w-9 text-center">
                   <input
                     type="checkbox"
                     aria-label="Select all visible rows"
@@ -1325,49 +1091,36 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                     className="rounded border-slate-300 accent-[#128C7E] cursor-pointer"
                   />
                 </th>
-                <th className="py-2.5 px-2.5 w-14 border-r border-[#DCE4E0] text-center">
-                  S.No.
-                </th>
-                <th className="py-2.5 px-3 border-r border-[#DCE4E0] min-w-[125px]">Name</th>
-                <th className="py-2.5 px-3 border-r border-[#DCE4E0] w-28">Number</th>
-                <th className="py-2.5 px-3 border-r border-[#DCE4E0] w-28">
-                  Date
-                </th>
-                <th className="py-2.5 px-3 border-r border-[#DCE4E0] w-32">Service</th>
-                <th className="py-2.5 px-3 border-r border-[#DCE4E0] w-28">City</th>
-                <th className="py-2.5 px-3 border-r border-[#DCE4E0] min-w-[180px]">Address</th>
-                <th className="py-2.5 px-2.5 border-r border-[#DCE4E0] w-14 text-right">Qty</th>
-                <th className="py-2.5 px-3 border-r border-[#DCE4E0] w-24 text-right">
-                  Price (₹)
-                </th>
+                <th className="py-2 px-2.5 w-10 text-center">No</th>
+                <th className="py-2 px-2.5 w-24">Date</th>
+                <th className="py-2 px-2.5">Customer</th>
+                <th className="py-2 px-2.5 w-28">Phone</th>
+                <th className="py-2 px-2.5 w-28">Service</th>
+                <th className="py-2 px-2.5 w-24">City</th>
+                <th className="py-2 px-2.5">Address / Note</th>
+                <th className="py-2 px-2 w-12 text-right">Qty</th>
+                <th className="py-2 px-2.5 w-24 text-right">Price</th>
                 {mode === 'completed' && (
-                  <th className="py-2.5 px-3 border-r border-[#DCE4E0] w-28 text-right">
-                    30% Comm
-                  </th>
+                  <th className="py-2 px-2.5 w-24 text-right">30% Comm</th>
                 )}
-                <th className="py-2.5 px-3 border-r border-[#DCE4E0] w-28">
-                  Cleaner
-                </th>
-                <th className="py-2.5 px-3 border-r border-[#DCE4E0] min-w-[140px]">
-                  Message
-                </th>
+                <th className="py-2 px-2.5 w-28">Cleaner</th>
                 {currentUser.role === 'super_admin' && (
-                  <th className="py-2.5 px-3 border-r border-[#DCE4E0] w-24">Telecaller</th>
+                  <th className="py-2 px-2.5 w-24">Telecaller</th>
                 )}
                 {mode === 'completed' && (
-                  <th className="py-2.5 px-3 border-r border-[#DCE4E0] w-28">Done By</th>
+                  <th className="py-2 px-2.5 w-24">Done By</th>
                 )}
-                <th className="py-2.5 px-3 w-52 text-right">Actions</th>
+                <th className="py-2 px-2.5 w-52 text-right">Action</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#DCE4E0] text-[13px]">
+            <tbody className="divide-y divide-[#DCE4E0] text-xs">
               {loading ? (
                 <tr>
                   <td
                     colSpan={totalCols}
                     className="py-10 text-center text-sm text-slate-500"
                   >
-                    Loading spreadsheet rows...
+                    Loading orders...
                   </td>
                 </tr>
               ) : visibleOrders.length === 0 ? (
@@ -1380,8 +1133,8 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                     </div>
                     <div className="text-xs text-slate-500 mt-1">
                       {mode === 'active'
-                        ? 'Use the Quick Data Entry Row above to add a booking, or clear filters.'
-                        : 'Orders marked as Done from Active Orders will appear here automatically.'}
+                        ? 'Click the red New Order Entry button above to add a booking, or reset filters.'
+                        : 'Orders confirmed from Active Orders will appear here automatically.'}
                     </div>
                   </td>
                 </tr>
@@ -1392,15 +1145,31 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                   const isChecked = selectedIds.includes(order.id);
                   const isEditing = (field: EditableField) =>
                     editingCell?.id === order.id && editingCell.field === field;
+                  const isSentTransfer = isSentTransferOrder(order);
+                  const isReceivedTransfer = isReceivedTransferOrder(order);
+                  const isOtherTransfer =
+                    !isSentTransfer && !isReceivedTransfer && Boolean(order.transferredFromName);
+
+                  let rowClass = 'hover:bg-[#FAFDFB]';
+                  if (isChecked) {
+                    rowClass = 'bg-[#E9F7F0]';
+                  } else if (isSentTransfer) {
+                    rowClass =
+                      'bg-purple-100 hover:bg-purple-200/80 text-purple-950 border-l-4 border-l-purple-700';
+                  } else if (isReceivedTransfer) {
+                    rowClass =
+                      'bg-pink-200 hover:bg-pink-300/80 text-pink-950 border-l-4 border-l-pink-700';
+                  } else if (isOtherTransfer) {
+                    rowClass =
+                      'bg-purple-50 hover:bg-purple-100/75 text-purple-950 border-l-4 border-l-purple-500';
+                  }
 
                   return (
                     <tr
                       key={order.id}
-                      className={`transition-colors ${
-                        isChecked ? 'bg-[#E9F7F0]' : 'hover:bg-[#F2F8F5]'
-                      }`}
+                      className={`transition-colors ${rowClass}`}
                     >
-                      <td className="py-2 px-3 border-r border-[#DCE4E0] text-center">
+                      <td className="py-2 px-2.5 text-center">
                         <input
                           type="checkbox"
                           aria-label={`Select order ${serialNo}`}
@@ -1410,15 +1179,108 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                         />
                       </td>
 
-                      <td className="py-2 px-2.5 border-r border-[#DCE4E0] text-center font-mono-num text-xs font-semibold text-slate-500 bg-[#FAFDFB]">
+                      <td className="py-2 px-2.5 text-center font-mono-num font-semibold text-slate-500">
                         {serialNo}
                       </td>
 
-                      {/* Name (Optional) */}
+                      {/* Date of Booking (Inline Indian Format: Aj, Kal, Parso, Date, Not Confirm) */}
+                      <td
+                        onClick={() => !isEditing('bookingDate') && startEdit(order, 'bookingDate')}
+                        className="py-2 px-2.5 font-mono-num text-slate-700 cursor-pointer whitespace-nowrap"
+                        title="Click to pick Aj / Kal / Parso / Date / Not Confirm"
+                      >
+                        {isEditing('bookingDate') ? (
+                          <div
+                            className="space-y-1 min-w-[240px]"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="flex items-center gap-1">
+                              {[
+                                { label: 'Aj', date: todayStr(0) },
+                                { label: 'Kal', date: todayStr(1) },
+                                { label: 'Parso', date: todayStr(2) },
+                              ].map((opt) => (
+                                <button
+                                  key={opt.label}
+                                  type="button"
+                                  onClick={() => commitEdit(order, opt.date)}
+                                  className={`px-1.5 py-0.5 text-[10px] font-semibold rounded border cursor-pointer whitespace-nowrap ${
+                                    order.bookingDate === opt.date
+                                      ? 'bg-[#075E54] text-white border-[#075E54]'
+                                      : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-slate-50'
+                                  }`}
+                                >
+                                  {opt.label}
+                                </button>
+                              ))}
+                              <button
+                                type="button"
+                                onClick={() => setEditingCustomDate(true)}
+                                className={`px-1.5 py-0.5 text-[10px] font-semibold rounded border cursor-pointer whitespace-nowrap ${
+                                  editingCustomDate ||
+                                  (Boolean(order.bookingDate) && !getIndianDayTag(order.bookingDate))
+                                    ? 'bg-[#075E54] text-white border-[#075E54]'
+                                    : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-slate-50'
+                                }`}
+                              >
+                                Date
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => commitEdit(order, '')}
+                                className={`px-1.5 py-0.5 text-[10px] font-semibold rounded border cursor-pointer whitespace-nowrap ${
+                                  !editingCustomDate && !order.bookingDate
+                                    ? 'bg-amber-600 text-white border-amber-600'
+                                    : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                                }`}
+                              >
+                                Not Confirm
+                              </button>
+                            </div>
+                            {(editingCustomDate ||
+                              (Boolean(order.bookingDate) && !getIndianDayTag(order.bookingDate))) && (
+                              <div className="flex items-center gap-1">
+                                <IndianDateInput
+                                  ariaLabel="Pick custom booking date"
+                                  title="Pick Date (DD/MM/YY)"
+                                  value={editingValue}
+                                  onChange={(val) => {
+                                    if (val) commitEdit(order, val);
+                                  }}
+                                  className="flex-1 border-[#128C7E]"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingCell(null)}
+                                  aria-label="Close date editor"
+                                  className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ) : order.bookingDate ? (
+                          <div>
+                            <span>{formatIndianDate(order.bookingDate)}</span>
+                            {getIndianDayTag(order.bookingDate) && (
+                              <span className="ml-1 text-[10px] font-semibold text-[#075E54]">
+                                ({getIndianDayTag(order.bookingDate)})
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[11px] font-semibold">
+                            Not Confirm
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Customer Name (Optional) */}
                       <td
                         onClick={() => !isEditing('name') && startEdit(order, 'name')}
-                        className="py-2 px-3 border-r border-[#DCE4E0] font-medium text-slate-900 cursor-text"
-                        title="Click to edit Name"
+                        className="py-2 px-2.5 font-semibold text-slate-900 cursor-text"
+                        title="Click to edit Customer Name"
                       >
                         {isEditing('name') ? (
                           <input
@@ -1428,18 +1290,35 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                             onChange={(e) => setEditingValue(e.target.value)}
                             onBlur={() => commitEdit(order)}
                             onKeyDown={(e) => handleCellKeyDown(e, order)}
-                            className="w-full px-1.5 py-0.5 text-[13px] border border-[#128C7E] rounded bg-white focus:outline-none"
+                            className="w-full px-1.5 py-0.5 text-xs border border-[#128C7E] rounded bg-white focus:outline-none"
                           />
                         ) : (
-                          <span>{order.name || <span className="text-slate-400">—</span>}</span>
+                          <div>
+                            <div>{order.name || <span className="text-slate-400 font-normal">—</span>}</div>
+                            {isSentTransfer && (
+                              <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-purple-700 text-white text-[10px] font-semibold">
+                                Sent to {order.createdByName}
+                              </span>
+                            )}
+                            {isReceivedTransfer && order.transferredFromName && (
+                              <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-pink-700 text-white text-[10px] font-semibold">
+                                Received from {order.transferredFromName}
+                              </span>
+                            )}
+                            {isOtherTransfer && order.transferredFromName && (
+                              <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-purple-700 text-white text-[10px] font-semibold">
+                                {order.transferredFromName} → {order.createdByName}
+                              </span>
+                            )}
+                          </div>
                         )}
                       </td>
 
-                      {/* Number */}
+                      {/* Phone Number */}
                       <td
                         onClick={() => !isEditing('number') && startEdit(order, 'number')}
-                        className="py-2 px-3 border-r border-[#DCE4E0] font-mono-num text-xs text-slate-800 cursor-text"
-                        title="Click to edit Number"
+                        className="py-2 px-2.5 font-mono-num text-slate-800 cursor-text whitespace-nowrap"
+                        title="Click to edit Phone"
                       >
                         {isEditing('number') ? (
                           <input
@@ -1456,50 +1335,72 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                         )}
                       </td>
 
-                      {/* Date of Booking (Optional) */}
-                      <td
-                        onClick={() => !isEditing('bookingDate') && startEdit(order, 'bookingDate')}
-                        className="py-2 px-3 border-r border-[#DCE4E0] font-mono-num text-xs text-slate-700 cursor-text"
-                        title="Click to edit Booking Date"
-                      >
-                        {isEditing('bookingDate') ? (
-                          <input
-                            autoFocus
-                            type="date"
-                            value={editingValue}
-                            onChange={(e) => setEditingValue(e.target.value)}
-                            onBlur={() => commitEdit(order)}
-                            onKeyDown={(e) => handleCellKeyDown(e, order)}
-                            className="w-full px-1 py-0.5 text-xs font-mono-num border border-[#128C7E] rounded bg-white focus:outline-none"
-                          />
-                        ) : (
-                          <span>{order.bookingDate || <span className="text-slate-400">—</span>}</span>
-                        )}
-                      </td>
-
-                      {/* Service Name Dropdown */}
+                      {/* Service Name Multi-Select Inline Editor */}
                       <td
                         onClick={() => !isEditing('serviceName') && startEdit(order, 'serviceName')}
-                        className="py-2 px-3 border-r border-[#DCE4E0] text-slate-800 cursor-pointer"
-                        title="Click to change Service"
+                        className="py-2 px-2.5 text-slate-800 cursor-pointer"
+                        title="Click to change or combine Services"
                       >
                         {isEditing('serviceName') ? (
-                          <select
-                            autoFocus
-                            value={editingValue}
-                            onChange={(e) => {
-                              setEditingValue(e.target.value);
-                              commitEdit(order, e.target.value);
-                            }}
-                            onBlur={() => commitEdit(order)}
-                            className="w-full px-1 py-0.5 text-xs border border-[#128C7E] rounded bg-white focus:outline-none"
+                          <div
+                            className="space-y-1.5 min-w-[180px]"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            {config.services.map((s) => (
-                              <option key={s} value={s}>
-                                {s}
-                              </option>
-                            ))}
-                          </select>
+                            <div className="flex flex-wrap gap-1">
+                              {config.services.map((s) => {
+                                const selectedList = editingValue
+                                  .split('+')
+                                  .map((item) => item.trim())
+                                  .filter(Boolean);
+                                const isActive = selectedList.some(
+                                  (item) => item.toLowerCase() === s.toLowerCase()
+                                );
+                                return (
+                                  <button
+                                    key={s}
+                                    type="button"
+                                    onClick={() => {
+                                      let next = isActive
+                                        ? selectedList.filter(
+                                            (item) => item.toLowerCase() !== s.toLowerCase()
+                                          )
+                                        : [...selectedList, s];
+                                      if (next.length === 0) next = [s];
+                                      next.sort(
+                                        (a, b) =>
+                                          config.services.indexOf(a) - config.services.indexOf(b)
+                                      );
+                                      setEditingValue(next.join(' + '));
+                                    }}
+                                    className={`px-1.5 py-0.5 text-[10px] font-semibold rounded border cursor-pointer ${
+                                      isActive
+                                        ? 'bg-[#075E54] text-white border-[#075E54]'
+                                        : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-slate-50'
+                                    }`}
+                                  >
+                                    {isActive ? '✓ ' : '+ '}
+                                    {s}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => commitEdit(order, editingValue)}
+                                className="px-2 py-0.5 text-[10px] font-semibold bg-[#128C7E] text-white rounded cursor-pointer"
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingCell(null)}
+                                className="px-1.5 py-0.5 text-[10px] text-slate-500 hover:text-slate-800 cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
                         ) : (
                           <span>{order.serviceName}</span>
                         )}
@@ -1508,7 +1409,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                       {/* City Dropdown */}
                       <td
                         onClick={() => !isEditing('city') && startEdit(order, 'city')}
-                        className="py-2 px-3 border-r border-[#DCE4E0] text-slate-800 cursor-pointer"
+                        className="py-2 px-2.5 text-slate-700 cursor-pointer"
                         title="Click to change City"
                       >
                         {isEditing('city') ? (
@@ -1536,12 +1437,8 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                         )}
                       </td>
 
-                      {/* Address (Optional) */}
-                      <td
-                        onClick={() => !isEditing('address') && startEdit(order, 'address')}
-                        className="py-2 px-3 border-r border-[#DCE4E0] text-slate-700 cursor-text"
-                        title="Click to edit Address"
-                      >
+                      {/* Address / Note (Matching Today's Active Vendors combined cell, both inline-editable) */}
+                      <td className="py-2 px-2.5 text-slate-600 max-w-[260px]">
                         {isEditing('address') ? (
                           <input
                             autoFocus
@@ -1550,19 +1447,44 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                             onChange={(e) => setEditingValue(e.target.value)}
                             onBlur={() => commitEdit(order)}
                             onKeyDown={(e) => handleCellKeyDown(e, order)}
-                            className="w-full px-1.5 py-0.5 text-[13px] border border-[#128C7E] rounded bg-white focus:outline-none"
+                            placeholder="Address..."
+                            className="w-full px-1.5 py-0.5 text-xs border border-[#128C7E] rounded bg-white focus:outline-none"
+                          />
+                        ) : isEditing('notes') ? (
+                          <input
+                            autoFocus
+                            type="text"
+                            value={editingValue}
+                            onChange={(e) => setEditingValue(e.target.value)}
+                            onBlur={() => commitEdit(order)}
+                            onKeyDown={(e) => handleCellKeyDown(e, order)}
+                            placeholder="Note / Message..."
+                            className="w-full px-1.5 py-0.5 text-xs border border-[#128C7E] rounded bg-white focus:outline-none"
                           />
                         ) : (
-                          <span className="leading-snug">
-                            {order.address || <span className="text-slate-400">—</span>}
-                          </span>
+                          <div>
+                            <div
+                              onClick={() => startEdit(order, 'address')}
+                              title="Click to edit Address"
+                              className="truncate cursor-text hover:text-slate-900"
+                            >
+                              {order.address || '—'}
+                            </div>
+                            <div
+                              onClick={() => startEdit(order, 'notes')}
+                              title="Click to edit Note / Message"
+                              className="text-[11px] text-slate-500 truncate cursor-text hover:text-slate-800"
+                            >
+                              {order.notes || <span className="text-slate-300">+ Note</span>}
+                            </div>
+                          </div>
                         )}
                       </td>
 
                       {/* Qty (Optional) */}
                       <td
                         onClick={() => !isEditing('qty') && startEdit(order, 'qty')}
-                        className="py-2 px-2.5 border-r border-[#DCE4E0] text-right font-mono-num text-slate-900 cursor-text"
+                        className="py-2 px-2 text-right font-mono-num text-slate-800 cursor-text"
                         title="Click to edit Qty"
                       >
                         {isEditing('qty') ? (
@@ -1577,14 +1499,14 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                             className="w-12 px-1 py-0.5 text-right text-xs font-mono-num border border-[#128C7E] rounded bg-white focus:outline-none"
                           />
                         ) : (
-                          <span>{order.qty ?? <span className="text-slate-400">—</span>}</span>
+                          <span>{order.qty ?? '—'}</span>
                         )}
                       </td>
 
                       {/* Price (Manual ₹) */}
                       <td
                         onClick={() => !isEditing('price') && startEdit(order, 'price')}
-                        className="py-2 px-3 border-r border-[#DCE4E0] text-right font-mono-num font-semibold text-slate-900 cursor-text"
+                        className="py-2 px-2.5 text-right font-mono-num font-bold text-slate-900 cursor-text"
                         title="Click to edit Price"
                       >
                         {isEditing('price') ? (
@@ -1602,8 +1524,8 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                           <div>
                             <span>₹{order.price.toLocaleString('en-IN')}</span>
                             {Number(order.extraAmount || 0) > 0 && (
-                              <div className="text-[10px] text-blue-700 font-medium">
-                                +₹{Number(order.extraAmount).toLocaleString('en-IN')} extra
+                              <div className="text-[10px] font-normal text-blue-700">
+                                +₹{Number(order.extraAmount).toLocaleString('en-IN')}
                               </div>
                             )}
                           </div>
@@ -1615,7 +1537,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                         const comm30 = calcCommission30(orderTotal);
                         const pending = getPendingCommission(order);
                         return (
-                          <td className="py-2 px-3 border-r border-[#DCE4E0] text-right font-mono-num">
+                          <td className="py-2 px-2.5 text-right font-mono-num">
                             <div className="font-semibold text-amber-800">
                               ₹{comm30.toLocaleString('en-IN')}
                             </div>
@@ -1635,7 +1557,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                       {/* Cleaner Name Dropdown */}
                       <td
                         onClick={() => !isEditing('cleanerName') && startEdit(order, 'cleanerName')}
-                        className="py-2 px-3 border-r border-[#DCE4E0] font-medium text-[#075E54] cursor-pointer"
+                        className="py-2 px-2.5 font-medium text-[#075E54] cursor-pointer whitespace-nowrap"
                         title="Click to change Cleaner"
                       >
                         {isEditing('cleanerName') ? (
@@ -1647,7 +1569,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                               commitEdit(order, e.target.value);
                             }}
                             onBlur={() => commitEdit(order)}
-                            className="w-full px-1 py-0.5 text-xs border border-[#128C7E] rounded bg-white focus:outline-none"
+                            className="w-full px-1.5 py-0.5 text-xs border border-[#128C7E] rounded bg-white text-slate-800 focus:outline-none"
                           >
                             {config.cleaners.map((cl) => (
                               <option key={cl} value={cl}>
@@ -1659,119 +1581,118 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                             )}
                           </select>
                         ) : (
-                          <span>{order.cleanerName}</span>
-                        )}
-                      </td>
-
-                      {/* Message / Notes */}
-                      <td
-                        onClick={() => !isEditing('notes') && startEdit(order, 'notes')}
-                        className="py-2 px-3 border-r border-[#DCE4E0] text-xs text-slate-600 cursor-text"
-                        title="Click to edit Message"
-                      >
-                        {isEditing('notes') ? (
-                          <input
-                            autoFocus
-                            type="text"
-                            value={editingValue}
-                            onChange={(e) => setEditingValue(e.target.value)}
-                            onBlur={() => commitEdit(order)}
-                            onKeyDown={(e) => handleCellKeyDown(e, order)}
-                            className="w-full px-1.5 py-0.5 text-xs border border-[#128C7E] rounded bg-white focus:outline-none"
-                          />
-                        ) : (
-                          <span>{order.notes || <span className="text-slate-400">—</span>}</span>
+                          <span>{order.cleanerName || 'Unassigned'}</span>
                         )}
                       </td>
 
                       {currentUser.role === 'super_admin' && (
-                        <td className="py-2 px-3 border-r border-[#DCE4E0] text-xs text-slate-600">
-                          {order.createdByName}
+                        <td className="py-2 px-2.5 text-xs text-slate-600 whitespace-nowrap">
+                          <div>{order.createdByName}</div>
+                          {order.transferredFromName && (
+                            <div
+                              className={`text-[10px] font-semibold ${
+                                isReceivedTransfer ? 'text-pink-800' : 'text-purple-800'
+                              }`}
+                            >
+                              From {order.transferredFromName}
+                            </div>
+                          )}
                         </td>
                       )}
 
                       {mode === 'completed' && (
-                        <td className="py-2 px-3 border-r border-[#DCE4E0] text-xs text-slate-700">
+                        <td className="py-2 px-2.5 text-xs text-slate-700 whitespace-nowrap">
                           <div>{order.completedByName || order.createdByName || '—'}</div>
                           {order.completedAt && (
                             <div className="text-[10px] font-mono-num text-slate-400">
                               {new Date(order.completedAt).toLocaleDateString('en-IN', {
                                 day: '2-digit',
-                                month: 'short',
+                                month: '2-digit',
+                                year: '2-digit',
                               })}
                             </div>
                           )}
                         </td>
                       )}
 
-                      {/* Actions */}
-                      <td className="py-2 px-3 text-right whitespace-nowrap">
+                      {/* Actions: Copy, Invoice PDF, Transfer, Confirm, Delete */}
+                      <td className="py-2 px-2.5 text-right whitespace-nowrap">
                         <div className="inline-flex items-center justify-end gap-1">
-                          {order.number && (
-                            <button
-                              type="button"
-                              onClick={() => setConfirmOrder(order)}
-                              title="Send Booking Confirmation to Client via WhatsApp"
-                              className="px-2 py-1 text-xs font-semibold bg-[#E7F8EE] hover:bg-[#D1F2DF] text-[#075E54] border border-[#BFEAD1] rounded flex items-center gap-1 cursor-pointer"
-                            >
-                              <Send className="w-3.5 h-3.5 text-[#128C7E]" />
-                              Client
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleCopyOrder(order)}
+                            title="Copy order details"
+                            className="px-2 py-1 text-[11px] font-medium bg-white hover:bg-slate-50 text-slate-700 border border-[#DCE4E0] rounded inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            {copiedOrderId === order.id ? (
+                              <Check className="w-3 h-3 text-[#128C7E]" />
+                            ) : (
+                              <Copy className="w-3 h-3 text-slate-500" />
+                            )}
+                            {copiedOrderId === order.id ? 'Copied' : 'Copy'}
+                          </button>
 
                           <button
                             type="button"
                             onClick={() => setInvoiceOrder(order)}
-                            title="Generate Auto Bill & Invoice (City Clean Company)"
-                            className="px-2 py-1 text-xs font-semibold bg-white hover:bg-slate-50 text-slate-800 border border-[#DCE4E0] rounded flex items-center gap-1 cursor-pointer"
+                            title="Generate Invoice PDF (City Clean Company)"
+                            className="px-2 py-1 text-[11px] font-semibold bg-white hover:bg-slate-50 text-[#075E54] border border-[#DCE4E0] rounded inline-flex items-center gap-1 cursor-pointer"
                           >
-                            <FileText className="w-3.5 h-3.5 text-[#075E54]" />
-                            Invoice
+                            <FileText className="w-3 h-3 text-[#075E54]" />
+                            Invoice PDF
                           </button>
 
-                          {mode === 'active' ? (
+                          {!(isSentTransfer && currentUser.role !== 'super_admin') ? (
                             <>
                               <button
                                 type="button"
-                                onClick={() => onOpenWhatsAppForCleaner(order.cleanerName)}
-                                title={`Send all ${order.cleanerName} orders to WhatsApp Group`}
-                                className="p-1.5 text-[#128C7E] hover:bg-[#E7F5EE] rounded cursor-pointer"
+                                onClick={() => setTransferTargetIds([order.id])}
+                                title="Transfer this order to another telecaller dashboard"
+                                className="px-2 py-1 text-[11px] font-semibold bg-white hover:bg-[#E9F7F0] text-[#075E54] border border-[#DCE4E0] rounded inline-flex items-center gap-1 cursor-pointer"
                               >
-                                <MessageCircle className="w-4 h-4" />
+                                <ArrowRightLeft className="w-3 h-3 text-[#075E54]" />
+                                Transfer
                               </button>
+
+                              {mode === 'active' ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onUpdateOrder(order.id, { status: 'completed' })
+                                  }
+                                  title="Confirm / complete order"
+                                  className="px-2 py-1 text-[11px] font-semibold bg-[#128C7E] hover:bg-[#075E54] text-white rounded inline-flex items-center gap-1 cursor-pointer"
+                                >
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  Confirm
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => onUpdateOrder(order.id, { status: 'active' })}
+                                  title="Move back to Active Orders"
+                                  className="px-2 py-1 text-[11px] font-medium bg-white border border-[#DCE4E0] hover:bg-slate-50 text-slate-700 rounded inline-flex items-center gap-1 cursor-pointer"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  Reopen
+                                </button>
+                              )}
+
                               <button
                                 type="button"
-                                onClick={() =>
-                                  onUpdateOrder(order.id, { status: 'completed' })
-                                }
-                                title="Mark order complete"
-                                className="px-2 py-1 text-xs font-semibold bg-[#128C7E] hover:bg-[#075E54] text-white rounded flex items-center gap-1 cursor-pointer"
+                                onClick={() => setDeleteTargetOrder(order)}
+                                title="Delete order"
+                                className="px-2 py-1 text-[11px] font-semibold bg-white border border-red-200 hover:bg-red-50 text-red-600 rounded inline-flex items-center gap-1 cursor-pointer"
                               >
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                Done
+                                <Trash2 className="w-3 h-3" />
+                                Delete
                               </button>
                             </>
                           ) : (
-                            <button
-                              type="button"
-                              onClick={() => onUpdateOrder(order.id, { status: 'active' })}
-                              title="Move back to Active Orders"
-                              className="px-2 py-1 text-xs font-medium bg-white border border-[#DCE4E0] hover:bg-slate-50 text-slate-700 rounded flex items-center gap-1 cursor-pointer"
-                            >
-                              <RotateCcw className="w-3 h-3" />
-                              Reopen
-                            </button>
+                            <span className="px-2 py-1 text-[11px] font-semibold bg-purple-700 text-white rounded">
+                              Sent ({order.createdByName})
+                            </span>
                           )}
-
-                          <button
-                            type="button"
-                            onClick={() => setDeleteTargetOrder(order)}
-                            title="Delete order"
-                            className="px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 rounded inline-flex items-center gap-1 cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            Delete
-                          </button>
                         </div>
                       </td>
                     </tr>
@@ -1782,32 +1703,32 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
 
             {filteredOrders.length > 0 && (
               <tfoot>
-                <tr className="bg-[#EFF4F1] border-t-2 border-[#DCE4E0] text-xs font-bold text-slate-900">
-                  <td colSpan={8} className="py-2.5 px-4 text-right border-r border-[#DCE4E0]">
+                <tr className="bg-[#FAFDFB] border-t border-[#DCE4E0] text-xs font-bold text-slate-900">
+                  <td colSpan={8} className="py-2 px-3 text-right">
                     Filtered Totals ({filteredOrders.length} orders):
                   </td>
-                  <td className="py-2.5 px-2.5 text-right font-mono-num border-r border-[#DCE4E0]">
+                  <td className="py-2 px-2 text-right font-mono-num">
                     {totals.totalQty}
                   </td>
-                  <td className="py-2.5 px-3 text-right font-mono-num text-[#075E54] border-r border-[#DCE4E0]">
+                  <td className="py-2 px-2.5 text-right font-mono-num text-[#075E54]">
                     ₹{totals.totalPrice.toLocaleString('en-IN')}
                   </td>
                   {mode === 'completed' && (
-                    <td className="py-2.5 px-3 text-right font-mono-num text-amber-800 border-r border-[#DCE4E0]">
+                    <td className="py-2 px-2.5 text-right font-mono-num text-amber-800">
                       ₹{completedSummary.totalComm30.toLocaleString('en-IN')}
                     </td>
                   )}
                   <td
                     colSpan={
-                      3 +
+                      2 +
                       (currentUser.role === 'super_admin' ? 1 : 0) +
                       (mode === 'completed' ? 1 : 0)
                     }
-                    className="py-2.5 px-3 text-xs font-normal text-slate-500"
+                    className="py-2 px-2.5 text-xs font-normal text-slate-500"
                   >
                     {mode === 'completed'
                       ? `Pending Leni Hai: ₹${completedSummary.totalPending.toLocaleString('en-IN')}`
-                      : 'Click any cell above to edit inline'}
+                      : 'Click any field above to edit inline'}
                   </td>
                 </tr>
               </tfoot>
@@ -1817,10 +1738,22 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
 
         {/* Pagination Footer */}
         <div className="px-4 py-3 border-t border-[#DCE4E0] bg-[#FAFDFB] flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600">
-          <div>
-            Showing <span className="font-mono-num font-semibold text-slate-900">{startEntryIndex}</span> to{' '}
-            <span className="font-mono-num font-semibold text-slate-900">{endEntryIndex}</span> of{' '}
-            <span className="font-mono-num font-semibold text-slate-900">{filteredOrders.length}</span> entries
+          <div className="flex flex-wrap items-center gap-3">
+            <div>
+              Showing <span className="font-mono-num font-semibold text-slate-900">{startEntryIndex}</span> to{' '}
+              <span className="font-mono-num font-semibold text-slate-900">{endEntryIndex}</span> of{' '}
+              <span className="font-mono-num font-semibold text-slate-900">{filteredOrders.length}</span> entries
+            </div>
+            <div className="flex items-center gap-2.5 text-[11px]">
+              <span className="inline-flex items-center gap-1 text-purple-900 font-medium">
+                <span className="w-3 h-3 rounded bg-purple-600 inline-block" />
+                Sent Transfer
+              </span>
+              <span className="inline-flex items-center gap-1 text-pink-900 font-medium">
+                <span className="w-3 h-3 rounded bg-pink-700 inline-block" />
+                Received Transfer
+              </span>
+            </div>
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -1846,14 +1779,460 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
           </div>
         </div>
       </div>
-      </div>
+      {/* Wide Centered New Order Popup Modal — fits in one view without scrolling */}
+      {mode === 'active' && newOrderOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="new-order-modal-title"
+          className="fixed inset-0 z-40 bg-slate-900/55 flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+          onClick={() => setNewOrderOpen(false)}
+        >
+          <div
+            className="w-full max-w-5xl bg-white border border-[#DCE4E0] rounded-xl shadow-2xl overflow-hidden my-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-3 bg-[#075E54] text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Plus className="w-4 h-4 text-[#25D366]" />
+                <h2 id="new-order-modal-title" className="font-display text-base font-bold">
+                  New Order Entry
+                </h2>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-white/90 font-mono-num">
+                  {(() => {
+                    if (!newDate) return 'Not Confirm';
+                    const tag = getIndianDayTag(newDate);
+                    const formatted = formatIndianDate(newDate) || 'Not Confirm';
+                    return tag ? `${tag} · ${formatted}` : formatted;
+                  })()}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setNewOrderOpen(false)}
+                  aria-label="Close new order popup"
+                  className="p-1 rounded-lg hover:bg-white/15 text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
 
-      {/* Client WhatsApp Confirmation Modal */}
-      <ClientConfirmModal
-        order={confirmOrder}
-        onClose={() => setConfirmOrder(null)}
-        onNotify={onNotify}
-      />
+            <form onSubmit={handleQuickAdd} className="p-4 sm:p-5 space-y-3 max-h-[90vh] overflow-y-auto">
+              {/* Row 1 (3 Columns): Phone Number | Customer Name | City Name */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Phone Number <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    autoFocus
+                    type="text"
+                    required
+                    value={newNumber}
+                    onChange={(e) => setNewNumber(e.target.value)}
+                    placeholder="10-digit number"
+                    className={`w-full px-3 py-1.5 text-sm font-mono-num border rounded-lg focus:bg-white focus:outline-none ${
+                      duplicateMatches.some((m) => m.status === 'active')
+                        ? 'bg-red-50 border-red-400 focus:border-red-500'
+                        : duplicateMatches.length > 0
+                        ? 'bg-amber-50 border-amber-400 focus:border-amber-500'
+                        : 'bg-[#F7F9F8] border-[#DCE4E0] focus:border-[#128C7E]'
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Customer Name
+                  </label>
+                  <input
+                    type="text"
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="Optional"
+                    className="w-full px-3 py-1.5 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    City Name
+                  </label>
+                  <select
+                    value={newCity}
+                    onChange={(e) => setNewCity(e.target.value)}
+                    className="w-full px-3 py-1.5 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
+                  >
+                    {config.cities.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Multi-Service Selector (1 bar me ek ya ek se zyada services select karein) */}
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                  <label className="text-xs font-semibold text-slate-700">
+                    Services (Click to select 1 or multiple — e.g. Water tank + Sofa)
+                  </label>
+                  <span className="text-xs font-semibold text-[#075E54]">
+                    Selected: {newServices.join(' + ')}
+                  </span>
+                </div>
+                <div className="bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg p-1.5 flex flex-wrap gap-1.5">
+                  {config.services.map((s) => {
+                    const active = newServices.includes(s);
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => toggleNewService(s)}
+                        className={`px-3 py-1 text-xs font-semibold rounded-md border inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
+                          active
+                            ? 'bg-[#075E54] text-white border-[#075E54]'
+                            : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                        }`}
+                      >
+                        {active ? (
+                          <Check className="w-3.5 h-3.5 text-[#25D366]" />
+                        ) : (
+                          <Plus className="w-3.5 h-3.5 text-slate-400" />
+                        )}
+                        {s}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Live Telecaller Duplicate Number Alert */}
+              {checkingDuplicate && (
+                <div className="text-xs text-slate-500 px-3 py-1.5 bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg">
+                  Checking central records for this phone number...
+                </div>
+              )}
+
+              {!checkingDuplicate && duplicateMatches.length > 0 && (
+                <div
+                  role="alert"
+                  className={`rounded-lg border p-2.5 text-xs space-y-1.5 ${
+                    duplicateMatches.some((m) => m.status === 'active')
+                      ? 'bg-red-50 border-red-300 text-red-950'
+                      : 'bg-amber-50 border-amber-300 text-amber-950'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <AlertTriangle
+                      className={`w-4 h-4 shrink-0 ${
+                        duplicateMatches.some((m) => m.status === 'active')
+                          ? 'text-red-600'
+                          : 'text-amber-600'
+                      }`}
+                    />
+                    <span>
+                      {duplicateMatches.some((m) => m.status === 'active')
+                        ? `Order Already Taken! (${duplicateMatches.length} match)`
+                        : `Previous Order History (${duplicateMatches.length})`}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-32 overflow-y-auto">
+                    {duplicateMatches.slice(0, 4).map((m) => {
+                      const takenDate = m.createdAt
+                        ? new Date(m.createdAt).toLocaleDateString('en-IN', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            year: '2-digit',
+                          })
+                        : '';
+                      return (
+                        <div
+                          key={m.id}
+                          className="bg-white/90 border border-black/10 rounded p-2 text-[11px] leading-snug"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-slate-900">
+                              Telecaller: {m.createdByName}
+                              {m.createdById === currentUser.id ? ' (You)' : ''}
+                            </span>
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                                m.status === 'active'
+                                  ? 'bg-red-100 text-red-700'
+                                  : 'bg-slate-200 text-slate-700'
+                              }`}
+                            >
+                              {m.status}
+                            </span>
+                          </div>
+                          <div className="text-slate-700 mt-0.5">
+                            Name: <strong>{m.name || 'No Name'}</strong> · Booking:{' '}
+                            <strong className="font-mono-num">
+                              {formatIndianDate(m.bookingDate) || 'No Date'}
+                            </strong>
+                          </div>
+                          <div className="text-slate-600 mt-0.5">
+                            {m.serviceName} · {m.city} · ₹{m.price} · Cleaner: {m.cleanerName}
+                          </div>
+                          {m.address && (
+                            <div className="text-slate-500 truncate mt-0.5">Addr: {m.address}</div>
+                          )}
+                          {takenDate && (
+                            <div className="text-[10px] text-slate-400 mt-0.5">
+                              Entered on: {takenDate}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Row 2 (2 Wide Columns): Full Address | Message / Note */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Full Address
+                  </label>
+                  <input
+                    type="text"
+                    value={newAddress}
+                    onChange={(e) => setNewAddress(e.target.value)}
+                    placeholder="House no., Sector, Landmark (optional)"
+                    className="w-full px-3 py-1.5 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Message / Note (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={newNotes}
+                    onChange={(e) => setNewNotes(e.target.value)}
+                    placeholder="Any extra instruction..."
+                    className="w-full px-3 py-1.5 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
+                  />
+                </div>
+              </div>
+
+              {/* Row 3 (Water Tank Sizes in 6-col horizontal row when Water tank is selected) */}
+              {hasWaterTankSelected && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-slate-700">
+                      Water Tank Quantity (Size & Count)
+                    </label>
+                    {tankSummary.totalTanks > 0 && (
+                      <span className="text-xs text-[#075E54] font-semibold">
+                        Selected ({tankSummary.totalTanks}): {tankSummary.text}
+                      </span>
+                    )}
+                  </div>
+                  <div className="bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg p-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                      {TANK_TYPES.map((t) => {
+                        const count = tankCounts[t.key] || 0;
+                        return (
+                          <div
+                            key={t.key}
+                            className={`flex items-center justify-between px-2 py-1.5 rounded border text-xs ${
+                              count > 0
+                                ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold'
+                                : 'bg-white border-[#DCE4E0] text-slate-700'
+                            }`}
+                          >
+                            <span className="truncate mr-1">{t.label}</span>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => adjustTankCount(t.key, -1)}
+                                className="w-5 h-5 rounded bg-[#EFF4F1] hover:bg-[#DCE4E0] text-slate-700 font-bold flex items-center justify-center cursor-pointer"
+                              >
+                                -
+                              </button>
+                              <span className="w-4 text-center font-mono-num">{count}</span>
+                              <button
+                                type="button"
+                                onClick={() => adjustTankCount(t.key, 1)}
+                                className="w-5 h-5 rounded bg-[#128C7E] hover:bg-[#075E54] text-white font-bold flex items-center justify-center cursor-pointer"
+                              >
+                                +
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Row 4: [Quantity if non-tank service selected] | Price (₹) | Assign Cleaner | Inline Indian Booking Date */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-start">
+                {hasOtherServiceSelected && (
+                  <div className="lg:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      {hasWaterTankSelected ? 'Other Qty' : 'Quantity'}
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={newQty}
+                      onChange={(e) => setNewQty(e.target.value)}
+                      placeholder="e.g. 1, 2"
+                      className="w-full px-3 py-1.5 text-sm font-mono-num bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
+                    />
+                  </div>
+                )}
+
+                <div className={hasOtherServiceSelected ? 'lg:col-span-2' : 'lg:col-span-3'}>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Price (₹)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={newPrice}
+                    onChange={(e) => setNewPrice(e.target.value)}
+                    placeholder="Total Amount"
+                    className="w-full px-3 py-1.5 text-sm font-mono-num bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
+                  />
+                </div>
+
+                <div className="lg:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Assign Cleaner
+                  </label>
+                  <select
+                    value={newCleaner}
+                    onChange={(e) => setNewCleaner(e.target.value)}
+                    className="w-full px-3 py-1.5 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
+                  >
+                    {config.cleaners.map((cl) => (
+                      <option key={cl} value={cl}>
+                        {cl}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className={hasOtherServiceSelected ? 'lg:col-span-5' : 'lg:col-span-6'}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-slate-700">
+                      Booking Date (Req.)
+                    </label>
+                    <span
+                      className={`text-xs font-mono-num font-semibold ${
+                        newDate ? 'text-[#075E54]' : 'text-amber-700'
+                      }`}
+                    >
+                      {newDate ? formatIndianDate(newDate) : 'Not Confirm'}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5">
+                    {[
+                      { label: 'Aj', date: todayStr(0) },
+                      { label: 'Kal', date: todayStr(1) },
+                      { label: 'Parso', date: todayStr(2) },
+                    ].map((opt) => {
+                      const active = !customDateOpen && newDate === opt.date;
+                      return (
+                        <button
+                          key={opt.label}
+                          type="button"
+                          onClick={() => {
+                            setNewDate(opt.date);
+                            setCustomDateOpen(false);
+                          }}
+                          className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg border cursor-pointer transition-colors whitespace-nowrap ${
+                            active
+                              ? 'bg-[#075E54] text-white border-[#075E54]'
+                              : 'bg-[#F7F9F8] text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newDate) setNewDate(todayStr(1));
+                        setCustomDateOpen((prev) => !prev);
+                      }}
+                      className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg border cursor-pointer transition-colors whitespace-nowrap ${
+                        customDateOpen || (Boolean(newDate) && !getIndianDayTag(newDate))
+                          ? 'bg-[#075E54] text-white border-[#075E54]'
+                          : 'bg-[#F7F9F8] text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                      }`}
+                    >
+                      Date
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewDate('');
+                        setCustomDateOpen(false);
+                      }}
+                      className={`shrink-0 py-1.5 px-2.5 text-xs font-semibold rounded-lg border cursor-pointer transition-colors whitespace-nowrap ${
+                        !customDateOpen && !newDate
+                          ? 'bg-amber-600 text-white border-amber-600'
+                          : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                      }`}
+                    >
+                      Not Confirm
+                    </button>
+                  </div>
+
+                  {(customDateOpen || (Boolean(newDate) && !getIndianDayTag(newDate))) && (
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <IndianDateInput
+                        ariaLabel="Select custom booking date"
+                        title="Custom Date (DD/MM/YY)"
+                        value={newDate}
+                        onChange={(val) => {
+                          if (val) setNewDate(val);
+                        }}
+                        className="flex-1 rounded-lg border-[#128C7E]"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="flex items-center justify-end gap-2.5 pt-2.5 border-t border-[#DCE4E0]">
+                <button
+                  type="button"
+                  onClick={() => setNewOrderOpen(false)}
+                  className="px-4 py-2 text-xs font-semibold bg-white border border-[#DCE4E0] hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={adding}
+                  className="px-6 py-2 bg-[#128C7E] hover:bg-[#075E54] disabled:opacity-60 text-white text-sm font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  {adding ? 'Adding Order...' : 'Add Order Entry'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Delete Yes / No Confirmation Popup */}
       <ConfirmDialog
@@ -1888,7 +2267,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
           const firstActive =
             duplicateMatches.find((m) => m.status === 'active') || duplicateMatches[0];
           if (!firstActive) return 'This phone number already has an active order. Book anyway?';
-          return `This number (${firstActive.number}) already has an Active order taken by ${firstActive.createdByName} for "${firstActive.name || 'Customer'}" on Booking Date ${firstActive.bookingDate || 'N/A'} (${firstActive.serviceName}, ₹${firstActive.price}). Do you still want to add a new order?`;
+          return `This number (${firstActive.number}) already has an Active order taken by ${firstActive.createdByName} for "${firstActive.name || 'Customer'}" on Booking Date ${formatIndianDate(firstActive.bookingDate) || 'N/A'} (${firstActive.serviceName}, ₹${firstActive.price}). Do you still want to add a new order?`;
         })()}
         confirmLabel="Yes, Book Anyway"
         cancelLabel="No, Cancel"
@@ -1913,6 +2292,19 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
         order={invoiceOrder}
         onClose={() => setInvoiceOrder(null)}
         onNotify={onNotify}
+      />
+
+      {/* Pass Order to Another Telecaller Modal */}
+      <TransferOrderModal
+        ordersToTransfer={transferTargetOrders}
+        staffMembers={config.telecallers || []}
+        currentUser={currentUser}
+        onClose={() => setTransferTargetIds(null)}
+        onTransfer={async (ids, targetUserId) => {
+          await onTransferOrders(ids, targetUserId);
+          const transferredSet = new Set(ids);
+          setSelectedIds((prev) => prev.filter((id) => !transferredSet.has(id)));
+        }}
       />
     </div>
   );

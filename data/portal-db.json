@@ -27,7 +27,8 @@
       "passwordHash": "12470874d77bf069e431c5eda2ce8993:daffc7d6b7d8ad2d291b577895c868602b3412559bf7aefe1d49cfb405426524722526e2463442a1670c5cc8193153cc8c210ba9901bd93513ddd838b2954b9e",
       "role": "super_admin",
       "active": true,
-      "createdAt": "2026-11-13T07:27:30.569Z"
+      "createdAt": "2026-11-13T07:27:30.569Z",
+      "phpPasswordHash": "pbkdf2:b4d6a46f0debfe43f8feaf30b5a7d6d7:bd90579234af83ee1f5e83329871399594951f3bd97b31bdc9970f8d119bf5e3"
     },
     {
       "id": "tc-suhana",
@@ -36,7 +37,8 @@
       "passwordHash": "301f527fccbfbe83fc7446caf5f04d73:2771e6c8493c011d37c93c6fa6f162bfc931041b68bf03e7c208ef6ad5f36ce11da773a032fbc8b7682a0d649ac91fb87cb1133e2025b37e2038538edb0dcaf6",
       "role": "telecaller",
       "active": true,
-      "createdAt": "2026-11-13T07:27:30.569Z"
+      "createdAt": "2026-11-13T07:27:30.569Z",
+      "phpPasswordHash": "pbkdf2:225456a97e792f96fda786d2f790bed4:81e7a30be6fa19095bb456e7d813c15ea08f11f7c25345ca07ad8c10852ce5c1"
     },
     {
       "id": "tc-deepika",
@@ -50,6 +52,28 @@
   ],
   "orders": [
     {
+      "id": "ord-f69dc10d",
+      "name": "",
+      "number": "74616516516",
+      "bookingDate": "2026-11-14",
+      "address": "",
+      "serviceName": "Water tank",
+      "city": "Patiala",
+      "qty": null,
+      "price": 700,
+      "extraAmount": 0,
+      "cleanerName": "Jagdish",
+      "status": "completed",
+      "paymentStatus": "pending",
+      "paidCommission": 0,
+      "createdById": "admin-1",
+      "createdByName": "RK Mehra (Super Admin)",
+      "createdAt": "2026-11-13T17:04:14.733Z",
+      "updatedAt": "2026-11-13T17:04:51.571Z",
+      "completedAt": "2026-11-13T17:04:51.571Z",
+      "completedByName": "RK Mehra (Super Admin)"
+    },
+    {
       "id": "ord-101",
       "name": "Harpreet Singh",
       "number": "9815421104",
@@ -61,19 +85,22 @@
       "price": 1200,
       "cleanerName": "Jagdish",
       "notes": "5-seater sofa deep shampooing",
-      "status": "active",
+      "status": "completed",
       "createdById": "tc-suhana",
       "createdByName": "Suhana",
       "createdAt": "2026-11-13T07:27:30.569Z",
-      "updatedAt": "2026-11-13T07:27:30.569Z",
+      "updatedAt": "2026-11-13T15:48:18.045Z",
       "extraAmount": 0,
-      "paymentStatus": "pending"
+      "paymentStatus": "pending",
+      "paidCommission": 0,
+      "completedAt": "2026-11-13T15:48:18.045Z",
+      "completedByName": "RK Mehra (Super Admin)"
     },
     {
       "id": "ord-102",
       "name": "Gurpreet Kaur",
       "number": "9876234019",
-      "bookingDate": "2026-11-13",
+      "bookingDate": "2026-11-14",
       "address": "Flat 304, Motia Royal City",
       "serviceName": "Chimney",
       "city": "Patiala",
@@ -85,9 +112,10 @@
       "createdById": "tc-suhana",
       "createdByName": "Suhana",
       "createdAt": "2026-11-13T07:27:30.569Z",
-      "updatedAt": "2026-11-13T07:27:30.569Z",
+      "updatedAt": "2026-11-13T17:04:57.163Z",
       "extraAmount": 0,
-      "paymentStatus": "pending"
+      "paymentStatus": "pending",
+      "paidCommission": 0
     },
     {
       "id": "ord-103",
@@ -101,13 +129,16 @@
       "price": 1800,
       "cleanerName": "Jagdish",
       "notes": "3BHK bathroom acid wash",
-      "status": "active",
+      "status": "completed",
       "createdById": "tc-suhana",
       "createdByName": "Suhana",
       "createdAt": "2026-11-13T07:27:30.569Z",
-      "updatedAt": "2026-11-13T07:27:30.569Z",
+      "updatedAt": "2026-11-13T15:48:21.635Z",
       "extraAmount": 0,
-      "paymentStatus": "pending"
+      "paymentStatus": "pending",
+      "paidCommission": 0,
+      "completedAt": "2026-11-13T15:48:21.635Z",
+      "completedByName": "RK Mehra (Super Admin)"
     },
     {
       "id": "ord-104",
@@ -141,13 +172,16 @@
       "price": 650,
       "cleanerName": "Jagdish",
       "notes": "5-seater L-shape sofa dry clean",
-      "status": "active",
+      "status": "completed",
       "createdById": "tc-suhana",
       "createdByName": "Suhana",
       "createdAt": "2026-11-13T07:27:30.569Z",
-      "updatedAt": "2026-11-13T07:27:30.569Z",
+      "updatedAt": "2026-11-13T15:48:31.736Z",
       "extraAmount": 0,
-      "paymentStatus": "pending"
+      "paymentStatus": "pending",
+      "paidCommission": 0,
+      "completedAt": "2026-11-13T15:48:31.736Z",
+      "completedByName": "RK Mehra (Super Admin)"
     },
     {
       "id": "ord-106",

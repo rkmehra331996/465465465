@@ -13,6 +13,7 @@ import {
   buildHostingerDataHtaccess,
   buildHostingerHtaccess,
   buildHostingerReadme,
+  buildHostingerSqlFile,
   collectDirectoryZipEntries,
   createZipBuffer,
 } from './server-hostinger-package.ts';
@@ -56,6 +57,9 @@ interface StoredOrder {
   isExtraWork?: boolean;
   createdById: string;
   createdByName: string;
+  transferredFromId?: string;
+  transferredFromName?: string;
+  transferredAt?: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -843,13 +847,21 @@ app.get('/api/auth/me', requireAuth, (req: AuthedRequest, res) => {
   res.json({ user: toPublicUser(req.currentUser!) });
 });
 
-// Dropdown config (Cities, Cleaners, Services)
+// Dropdown config (Cities, Cleaners, Services, Active Staff for Order Passing)
 app.get('/api/config', requireAuth, (_req, res) => {
   res.json({
     cities: db.cities,
     cleaners: db.cleaners,
     services: DEFAULT_SERVICES,
     cleanerProfiles: db.cleanerProfiles || {},
+    telecallers: db.users
+      .filter((u) => u.active)
+      .map((u) => ({
+        id: u.id,
+        name: u.name,
+        username: u.username,
+        role: u.role,
+      })),
   });
 });
 
@@ -1061,7 +1073,9 @@ app.get('/api/orders', requireAuth, (req: AuthedRequest, res) => {
   const visibleOrders =
     user.role === 'super_admin'
       ? db.orders
-      : db.orders.filter((o) => o.createdById === user.id);
+      : db.orders.filter(
+          (o) => o.createdById === user.id || o.transferredFromId === user.id
+        );
 
   res.json({ orders: visibleOrders });
 });
@@ -1382,6 +1396,74 @@ app.post('/api/orders/bulk-payment', requireAuth, (req: AuthedRequest, res) => {
 
   saveDb({ ...db, orders: nextOrders });
   res.json({ ok: true, orders: updatedOrders });
+});
+
+app.post('/api/orders/transfer', requireAuth, (req: AuthedRequest, res) => {
+  const user = req.currentUser!;
+  const ids = Array.isArray(req.body?.ids)
+    ? (req.body.ids as unknown[]).map((v) => String(v)).filter(Boolean)
+    : [];
+  const targetUserId = String(req.body?.targetUserId ?? '').trim();
+
+  if (ids.length === 0) {
+    res.status(400).json({ error: 'No order IDs provided' });
+    return;
+  }
+  if (!targetUserId) {
+    res.status(400).json({ error: 'Target telecaller is required' });
+    return;
+  }
+
+  const targetUser = db.users.find((u) => u.id === targetUserId && u.active);
+  if (!targetUser) {
+    res.status(404).json({ error: 'Selected telecaller account was not found or is inactive' });
+    return;
+  }
+
+  const idSet = new Set(ids);
+  const now = new Date().toISOString();
+  const updatedOrders: StoredOrder[] = [];
+  let unauthorizedCount = 0;
+
+  const nextOrders = db.orders.map((o) => {
+    if (!idSet.has(o.id)) return o;
+    if (user.role !== 'super_admin' && o.createdById !== user.id) {
+      unauthorizedCount += 1;
+      return o;
+    }
+    if (o.createdById === targetUser.id) {
+      updatedOrders.push(o);
+      return o;
+    }
+    const nextOrder: StoredOrder = {
+      ...o,
+      transferredFromId: o.createdById || user.id,
+      transferredFromName: o.createdByName || user.name,
+      transferredAt: now,
+      createdById: targetUser.id,
+      createdByName: targetUser.name,
+      updatedAt: now,
+    };
+    updatedOrders.push(nextOrder);
+    return nextOrder;
+  });
+
+  if (updatedOrders.length === 0) {
+    res.status(unauthorizedCount > 0 ? 403 : 404).json({
+      error:
+        unauthorizedCount > 0
+          ? 'Not authorized to pass one or more selected orders'
+          : 'No matching orders found',
+    });
+    return;
+  }
+
+  saveDb({ ...db, orders: nextOrders });
+  res.json({
+    ok: true,
+    targetUser: { id: targetUser.id, name: targetUser.name },
+    orders: updatedOrders,
+  });
 });
 
 app.delete('/api/orders/:id', requireAuth, (req: AuthedRequest, res) => {
@@ -1820,18 +1902,25 @@ let hostingerBuildPromise: Promise<void> | null = null;
 
 async function ensureDistBuiltForHostinger(): Promise<string> {
   const distDir = path.resolve(process.cwd(), 'dist');
-  if (!hostingerBuildPromise) {
-    const viteBin = path.resolve(process.cwd(), 'node_modules/vite/bin/vite.js');
-    hostingerBuildPromise = execFileAsync(process.execPath, [viteBin, 'build'], {
-      cwd: process.cwd(),
-      timeout: 90000,
-    })
-      .then(() => undefined)
-      .finally(() => {
-        hostingerBuildPromise = null;
-      });
+  const viteBin = path.resolve(process.cwd(), 'node_modules/vite/bin/vite.js');
+  if (fs.existsSync(viteBin)) {
+    if (!hostingerBuildPromise) {
+      hostingerBuildPromise = execFileAsync(process.execPath, [viteBin, 'build'], {
+        cwd: process.cwd(),
+        timeout: 90000,
+      })
+        .then(() => undefined)
+        .catch((err) => {
+          if (!fs.existsSync(path.join(distDir, 'index.html'))) {
+            throw err;
+          }
+        })
+        .finally(() => {
+          hostingerBuildPromise = null;
+        });
+    }
+    await hostingerBuildPromise;
   }
-  await hostingerBuildPromise;
   if (!fs.existsSync(path.join(distDir, 'index.html'))) {
     throw new Error('Frontend build did not produce dist/index.html');
   }
@@ -1857,6 +1946,7 @@ app.get('/api/hostinger/download-zip', requireAuth, requireSuperAdmin, async (_r
       { name: '.htaccess', data: Buffer.from(buildHostingerHtaccess(), 'utf-8') },
       { name: 'config.php', data: Buffer.from(buildHostingerConfigPhp(), 'utf-8') },
       { name: 'api.php', data: Buffer.from(buildHostingerApiPhp(), 'utf-8') },
+      { name: 'database.sql', data: Buffer.from(buildHostingerSqlFile(db.orders), 'utf-8') },
       { name: 'README-HOSTINGER.txt', data: Buffer.from(buildHostingerReadme(), 'utf-8') },
       { name: 'data/.htaccess', data: Buffer.from(buildHostingerDataHtaccess(), 'utf-8') },
       { name: 'data/portal-db.json', data: Buffer.from(JSON.stringify(dbSnapshot, null, 2), 'utf-8') },

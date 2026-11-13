@@ -25,11 +25,19 @@ export interface CleanerProfile {
   city: string;
 }
 
+export interface PortalStaffMember {
+  id: string;
+  name: string;
+  username: string;
+  role: UserRole;
+}
+
 export interface PortalConfig {
   cities: string[];
   cleaners: string[];
   services: string[];
   cleanerProfiles: Record<string, CleanerProfile>;
+  telecallers?: PortalStaffMember[];
 }
 
 export interface Order {
@@ -54,6 +62,9 @@ export interface Order {
   isExtraWork?: boolean;
   createdById: string;
   createdByName: string;
+  transferredFromId?: string;
+  transferredFromName?: string;
+  transferredAt?: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;

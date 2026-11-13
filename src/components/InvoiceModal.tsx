@@ -1,14 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { jsPDF } from 'jspdf';
 import {
-  Check,
-  Copy,
   Download,
   FileText,
   Printer,
-  Send,
   X,
 } from 'lucide-react';
-import { formatWhatsAppPhone, getOrderTotal } from '../lib/api';
+import { formatIndianDate, getOrderTotal } from '../lib/api';
+import { IndianDateInput } from './IndianDateInput';
 import type { Order } from '../types';
 
 interface InvoiceModalProps {
@@ -102,7 +101,6 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
   const [paymentMode, setPaymentMode] = useState<'Cash' | 'UPI / Online' | 'Pending'>('Cash');
   const [discount, setDiscount] = useState('0');
   const [digitalSign, setDigitalSign] = useState(true);
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!order) return;
@@ -111,7 +109,6 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
     setPaymentMode(order.status === 'completed' || order.paymentStatus === 'clear' ? 'Cash' : 'Pending');
     setDiscount('0');
     setDigitalSign(true);
-    setCopied(false);
   }, [order]);
 
   const totals = useMemo(() => {
@@ -133,183 +130,229 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
   const bookingBy = order.createdByName || 'City Clean Support';
   const cleanerName = order.cleanerName || 'Assigned Expert';
 
-  const whatsappBillText = [
-    '*CITY CLEAN COMPANY — SERVICE INVOICE*',
-    'Water Tank | Sofa | Home | Kitchen | Bathroom | AC Cleaning',
-    'Website: CityCleanCompany.com',
-    'Customer Support: 9501359075 | 6283136043',
-    '--------------------------------',
-    `*Invoice No:* ${invoiceNo}`,
-    `*Date:* ${invoiceDate}`,
-    '',
-    '*Client Details:*',
-    `Name: ${customerName}`,
-    ...(order.number ? [`Phone: ${order.number}`] : []),
-    ...(fullAddress ? [`Address: ${fullAddress}`] : []),
-    '',
-    '*Booking & Service Staff Details:*',
-    `Booking By (Telecaller): ${bookingBy}`,
-    `Cleaning Expert Name: ${cleanerName}`,
-    '',
-    '*Bill Summary:*',
-    `Service: ${order.serviceName}${order.qty ? ` (Qty: ${order.qty})` : ''}`,
-    `Service Charge: ₹${totals.base.toLocaleString('en-IN')}`,
-    ...(totals.extra > 0 ? [`Extra Work: ₹${totals.extra.toLocaleString('en-IN')}`] : []),
-    ...(totals.disc > 0 ? [`Discount: -₹${totals.disc.toLocaleString('en-IN')}`] : []),
-    `*Total Bill: ₹${totals.grandTotal.toLocaleString('en-IN')}* (${totalWords})`,
-    `Payment Mode: ${paymentMode}`,
-    '--------------------------------',
-    `Verified & Signed By Cleaner: *${cleanerName}*`,
-    'Thank you for choosing City Clean Company!',
-  ].join('\n');
-
-  const waHref = order.number
-    ? `https://api.whatsapp.com/send?phone=${encodeURIComponent(
-        formatWhatsAppPhone(order.number)
-      )}&text=${encodeURIComponent(whatsappBillText)}`
-    : `https://api.whatsapp.com/send?text=${encodeURIComponent(whatsappBillText)}`;
-
-  const handleCopyText = async () => {
-    try {
-      await navigator.clipboard.writeText(whatsappBillText);
-      setCopied(true);
-      onNotify('Invoice bill WhatsApp ke liye copy ho gaya!');
-      setTimeout(() => setCopied(false), 1800);
-    } catch {
-      onNotify('Copy failed', 'error');
-    }
-  };
+  const formattedInvoiceDate = formatIndianDate(invoiceDate) || invoiceDate;
 
   const handlePrint = () => {
     window.print();
   };
 
-  const handleDownloadHtml = () => {
-    const html = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Invoice ${escapeHtml(invoiceNo)} - City Clean Company</title>
-<style>
-  body { font-family: Arial, Helvetica, sans-serif; color: #0f172a; background: #f8fafc; margin: 0; padding: 24px; }
-  .sheet { max-width: 780px; margin: 0 auto; background: #fff; border: 1px solid #cbd5e1; padding: 28px; }
-  .header { text-align: center; border-bottom: 2px solid #075E54; padding-bottom: 14px; margin-bottom: 18px; }
-  .brand { font-size: 26px; font-weight: 800; letter-spacing: 0.04em; color: #075E54; margin: 0; }
-  .services { font-size: 12px; color: #334155; margin: 6px 0 4px; font-weight: 600; }
-  .meta { font-size: 12px; color: #0f172a; margin: 2px 0; }
-  .grid { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 18px; font-size: 13px; }
-  .box { flex: 1; border: 1px solid #e2e8f0; padding: 10px 12px; background: #f8fafc; }
-  .box h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; color: #075E54; letter-spacing: 0.04em; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 13px; }
-  th, td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: left; }
-  th { background: #eff4f1; color: #0f172a; font-weight: 700; }
-  .right { text-align: right; font-variant-numeric: tabular-nums; }
-  .total-row td { font-weight: 800; font-size: 15px; background: #eff4f1; color: #075E54; }
-  .words { font-size: 12px; color: #334155; margin-bottom: 24px; }
-  .sigs { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 36px; padding-top: 12px; }
-  .sig-col { width: 220px; text-align: center; }
-  .sig-script { font-family: "Brush Script MT", "Segoe Script", cursive; font-size: 24px; color: #075E54; min-height: 30px; }
-  .sig-line { border-top: 1px solid #475569; padding-top: 6px; font-size: 12px; font-weight: 700; }
-  .sig-sub { font-size: 11px; color: #64748b; }
-  .footer { text-align: center; font-size: 11px; color: #64748b; border-top: 1px dashed #cbd5e1; padding-top: 10px; margin-top: 22px; }
-  @media print { body { background: #fff; padding: 0; } .sheet { border: none; } }
-</style>
-</head>
-<body>
-  <div class="sheet">
-    <div class="header">
-      <h1 class="brand">CITY CLEAN COMPANY</h1>
-      <div class="services">Water Tank Cleaning | Sofa Cleaning | Home Cleaning | Kitchen Cleaning | Bathroom Cleaning | AC Cleaning</div>
-      <div class="meta"><strong>Website:</strong> CityCleanCompany.com &nbsp;|&nbsp; <strong>Customer Support:</strong> 9501359075 | 6283136043</div>
-    </div>
+  const handleDownloadPdf = () => {
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const margin = 40;
+    const contentW = pageW - margin * 2;
+    let y = 48;
 
-    <div class="grid">
-      <div class="box">
-        <h4>Client Details</h4>
-        <div><strong>Name:</strong> ${escapeHtml(customerName)}</div>
-        <div><strong>Phone:</strong> ${escapeHtml(order.number || '—')}</div>
-        <div><strong>Address:</strong> ${escapeHtml(fullAddress || '—')}</div>
-      </div>
-      <div class="box">
-        <h4>Invoice Details</h4>
-        <div><strong>Invoice No:</strong> ${escapeHtml(invoiceNo)}</div>
-        <div><strong>Service Date:</strong> ${escapeHtml(invoiceDate)}</div>
-        <div><strong>Payment Mode:</strong> ${escapeHtml(paymentMode)}</div>
-      </div>
-    </div>
+    // Header
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(20);
+    doc.setTextColor(7, 94, 84);
+    doc.text('CITY CLEAN COMPANY', pageW / 2, y, { align: 'center' });
+    y += 16;
 
-    <table>
-      <thead>
-        <tr><th colspan="2">Booking &amp; Service Staff Details</th></tr>
-        <tr><th style="width:45%">Field</th><th>Details</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>Booking By (Telecaller Name)</td><td><strong>${escapeHtml(bookingBy)}</strong></td></tr>
-        <tr><td>Cleaning Expert Name</td><td><strong>${escapeHtml(cleanerName)}</strong></td></tr>
-      </tbody>
-    </table>
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(51, 65, 85);
+    doc.text(
+      'Water Tank Cleaning | Sofa Cleaning | Home Cleaning | Kitchen Cleaning | Bathroom Cleaning | AC Cleaning',
+      pageW / 2,
+      y,
+      { align: 'center' }
+    );
+    y += 14;
 
-    <table>
-      <thead>
-        <tr>
-          <th style="width:52px">S.No</th>
-          <th>Service Description</th>
-          <th>City</th>
-          <th class="right">Qty</th>
-          <th class="right">Amount (₹)</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>1</td>
-          <td><strong>${escapeHtml(order.serviceName)}</strong>${order.notes ? `<br/><span style="font-size:11px;color:#475569">${escapeHtml(order.notes)}</span>` : ''}</td>
-          <td>${escapeHtml(order.city)}</td>
-          <td class="right">${order.qty ?? 1}</td>
-          <td class="right">₹${totals.base.toLocaleString('en-IN')}</td>
-        </tr>
-        ${totals.extra > 0 ? `<tr><td>2</td><td colspan="3">Extra / Additional On-Site Cleaning Work</td><td class="right">₹${totals.extra.toLocaleString('en-IN')}</td></tr>` : ''}
-        ${totals.disc > 0 ? `<tr><td colspan="4" class="right">Discount</td><td class="right">-₹${totals.disc.toLocaleString('en-IN')}</td></tr>` : ''}
-        <tr class="total-row">
-          <td colspan="4" class="right">Total Bill</td>
-          <td class="right">₹${totals.grandTotal.toLocaleString('en-IN')}</td>
-        </tr>
-      </tbody>
-    </table>
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(
+      'Website: CityCleanCompany.com   |   Customer Support: 9501359075 | 6283136043',
+      pageW / 2,
+      y,
+      { align: 'center' }
+    );
+    y += 12;
 
-    <div class="words"><strong>Amount in Words:</strong> ${escapeHtml(totalWords)}</div>
+    doc.setDrawColor(7, 94, 84);
+    doc.setLineWidth(1.5);
+    doc.line(margin, y, pageW - margin, y);
+    y += 18;
 
-    <div class="sigs">
-      <div class="sig-col">
-        <div class="sig-script"></div>
-        <div class="sig-line">Customer Signature</div>
-        <div class="sig-sub">${escapeHtml(customerName)}</div>
-      </div>
-      <div class="sig-col">
-        <div class="sig-script">${digitalSign ? escapeHtml(cleanerName) : ''}</div>
-        <div class="sig-line">Signature by Cleaner</div>
-        <div class="sig-sub">${escapeHtml(cleanerName)} · City Clean Company</div>
-      </div>
-    </div>
+    // Two Info Boxes: Client Details & Invoice Details
+    const boxGap = 14;
+    const boxW = (contentW - boxGap) / 2;
+    const boxTop = y;
+    const addrLines = doc.splitTextToSize(`Address: ${fullAddress || '-'}`, boxW - 20);
+    const boxH = Math.max(76, 52 + addrLines.length * 12);
 
-    <div class="footer">
-      Thank you for choosing City Clean Company! For support or re-booking call 9501359075 | 6283136043 · CityCleanCompany.com
-    </div>
-  </div>
-</body>
-</html>`;
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.8);
+    doc.rect(margin, boxTop, boxW, boxH, 'FD');
+    doc.rect(margin + boxW + boxGap, boxTop, boxW, boxH, 'FD');
 
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(7, 94, 84);
+    doc.text('CLIENT DETAILS', margin + 10, boxTop + 16);
+    doc.text('INVOICE DETAILS', margin + boxW + boxGap + 10, boxTop + 16);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`Name: ${customerName}`, margin + 10, boxTop + 32);
+    doc.text(`Phone: ${order.number || '-'}`, margin + 10, boxTop + 46);
+    doc.text(addrLines, margin + 10, boxTop + 60);
+
+    const rightX = margin + boxW + boxGap + 10;
+    doc.text(`Invoice No: ${invoiceNo}`, rightX, boxTop + 32);
+    doc.text(`Service Date: ${formattedInvoiceDate}`, rightX, boxTop + 46);
+    doc.text(`Payment Mode: ${paymentMode}`, rightX, boxTop + 60);
+
+    y = boxTop + boxH + 18;
+
+    // Booking & Service Staff Details Table
+    doc.setFillColor(239, 244, 241);
+    doc.setDrawColor(203, 213, 225);
+    doc.rect(margin, y, contentW, 22, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(7, 94, 84);
+    doc.text('Booking & Service Staff Details', margin + 10, y + 15);
+    y += 22;
+
+    const colSplit = margin + contentW * 0.45;
+    const drawStaffRow = (field: string, val: string, header = false) => {
+      if (header) {
+        doc.setFillColor(248, 250, 252);
+        doc.rect(margin, y, contentW, 20, 'FD');
+      } else {
+        doc.rect(margin, y, contentW, 22, 'D');
+      }
+      doc.line(colSplit, y, colSplit, y + (header ? 20 : 22));
+      doc.setFont('helvetica', header ? 'bold' : 'normal');
+      doc.setFontSize(9.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text(field, margin + 10, y + 14);
+      doc.setFont('helvetica', 'bold');
+      doc.text(val, colSplit + 10, y + 14);
+      y += header ? 20 : 22;
+    };
+
+    drawStaffRow('Field', 'Details', true);
+    drawStaffRow('Booking By (Telecaller Name)', bookingBy);
+    drawStaffRow('Cleaning Expert Name', cleanerName);
+    y += 18;
+
+    // Service & Bill Summary Table
+    const cSno = margin;
+    const cDesc = margin + 42;
+    const cCity = margin + 275;
+    const cQty = margin + 375;
+    const cAmt = pageW - margin;
+
+    doc.setFillColor(239, 244, 241);
+    doc.rect(margin, y, contentW, 22, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text('S.No', cSno + 8, y + 14);
+    doc.text('Service Description', cDesc + 8, y + 14);
+    doc.text('City', cCity + 8, y + 14);
+    doc.text('Qty', cQty + 28, y + 14, { align: 'right' });
+    doc.text('Amount (Rs.)', cAmt - 8, y + 14, { align: 'right' });
+    y += 22;
+
+    const svcLines = doc.splitTextToSize(
+      order.notes ? `${order.serviceName} (${order.notes})` : order.serviceName,
+      220
+    );
+    const row1H = Math.max(24, svcLines.length * 13 + 10);
+    doc.rect(margin, y, contentW, row1H, 'D');
+    doc.setFont('helvetica', 'normal');
+    doc.text('1', cSno + 8, y + 15);
+    doc.setFont('helvetica', 'bold');
+    doc.text(svcLines, cDesc + 8, y + 15);
+    doc.setFont('helvetica', 'normal');
+    doc.text(order.city || '-', cCity + 8, y + 15);
+    doc.text(String(order.qty ?? 1), cQty + 28, y + 15, { align: 'right' });
+    doc.text(`Rs. ${totals.base.toLocaleString('en-IN')}`, cAmt - 8, y + 15, { align: 'right' });
+    y += row1H;
+
+    if (totals.extra > 0) {
+      doc.rect(margin, y, contentW, 22, 'D');
+      doc.text('2', cSno + 8, y + 15);
+      doc.text('Extra / Additional On-Site Cleaning Work', cDesc + 8, y + 15);
+      doc.text(`Rs. ${totals.extra.toLocaleString('en-IN')}`, cAmt - 8, y + 15, { align: 'right' });
+      y += 22;
+    }
+
+    if (totals.disc > 0) {
+      doc.rect(margin, y, contentW, 22, 'D');
+      doc.text('Discount', cQty + 28, y + 15, { align: 'right' });
+      doc.text(`-Rs. ${totals.disc.toLocaleString('en-IN')}`, cAmt - 8, y + 15, { align: 'right' });
+      y += 22;
+    }
+
+    doc.setFillColor(239, 244, 241);
+    doc.rect(margin, y, contentW, 26, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(7, 94, 84);
+    doc.text('Total Bill', cQty + 28, y + 17, { align: 'right' });
+    doc.text(`Rs. ${totals.grandTotal.toLocaleString('en-IN')}`, cAmt - 8, y + 17, {
+      align: 'right',
+    });
+    y += 40;
+
+    // Amount in Words
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(51, 65, 85);
+    const wordsLines = doc.splitTextToSize(`Amount in Words: ${totalWords}`, contentW);
+    doc.text(wordsLines, margin, y);
+    y += wordsLines.length * 14 + 44;
+
+    // Signatures
+    const leftSigX = margin + 95;
+    const rightSigX = pageW - margin - 95;
+    if (digitalSign) {
+      doc.setFont('times', 'italic');
+      doc.setFontSize(16);
+      doc.setTextColor(7, 94, 84);
+      doc.text(cleanerName, rightSigX, y - 10, { align: 'center' });
+    }
+    doc.setDrawColor(100, 116, 139);
+    doc.setLineWidth(0.8);
+    doc.line(margin + 10, y, margin + 180, y);
+    doc.line(pageW - margin - 180, y, pageW - margin - 10, y);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text('Customer Signature', leftSigX, y + 14, { align: 'center' });
+    doc.text('Signature by Cleaner', rightSigX, y + 14, { align: 'center' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(customerName, leftSigX, y + 26, { align: 'center' });
+    doc.text(`${cleanerName} · City Clean Company`, rightSigX, y + 26, { align: 'center' });
+    y += 54;
+
+    // Footer
+    doc.setDrawColor(203, 213, 225);
+    doc.line(margin, y, pageW - margin, y);
+    doc.setFontSize(8.5);
+    doc.text(
+      'Thank you for choosing City Clean Company! Support: 9501359075 | 6283136043 · CityCleanCompany.com',
+      pageW / 2,
+      y + 16,
+      { align: 'center' }
+    );
+
     const safeFile = `${invoiceNo}-${customerName}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-    link.setAttribute('download', `${safeFile}.html`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    onNotify('Invoice HTML bill downloaded!');
+    doc.save(`${safeFile}.pdf`);
+    onNotify('Invoice PDF downloaded!');
   };
 
   return (
@@ -317,20 +360,20 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
       className="fixed inset-0 z-50 bg-slate-900/55 flex items-center justify-center p-3 sm:p-5 overflow-y-auto invoice-modal-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label="City Clean Company Auto Invoice"
+      aria-label="City Clean Company PDF Invoice"
       onClick={onClose}
     >
       <div
         className="w-full max-w-[820px] bg-white border border-[#DCE4E0] rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh] invoice-modal-shell"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Top Modal Controls (Hidden on Print) */}
+        {/* Top Modal Controls — PDF Only (Hidden on Print) */}
         <div className="px-4 py-3 bg-[#075E54] text-white flex flex-wrap items-center justify-between gap-2 no-print">
           <div className="flex items-center gap-2">
             <FileText className="w-4 h-4 text-[#25D366]" />
             <div>
               <h3 className="font-display text-sm font-bold">
-                Auto Bill &amp; Invoice — CITY CLEAN COMPANY
+                Invoice PDF — CITY CLEAN COMPANY
               </h3>
               <p className="text-[11px] text-emerald-100/85 font-mono-num">
                 {customerName} · ₹{totals.grandTotal.toLocaleString('en-IN')}
@@ -341,40 +384,21 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
-              onClick={handlePrint}
+              onClick={handleDownloadPdf}
               className="px-3 py-1.5 text-xs font-semibold bg-white text-[#075E54] hover:bg-emerald-50 rounded-lg inline-flex items-center gap-1.5 cursor-pointer"
             >
-              <Printer className="w-3.5 h-3.5" />
-              Print / Save PDF
-            </button>
-
-            <button
-              type="button"
-              onClick={handleDownloadHtml}
-              className="px-3 py-1.5 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white rounded-lg inline-flex items-center gap-1.5 cursor-pointer"
-            >
               <Download className="w-3.5 h-3.5" />
-              Download Bill
+              Download PDF
             </button>
 
             <button
               type="button"
-              onClick={handleCopyText}
+              onClick={handlePrint}
               className="px-3 py-1.5 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white rounded-lg inline-flex items-center gap-1.5 cursor-pointer"
             >
-              {copied ? <Check className="w-3.5 h-3.5 text-[#25D366]" /> : <Copy className="w-3.5 h-3.5" />}
-              {copied ? 'Copied' : 'Copy Bill'}
+              <Printer className="w-3.5 h-3.5" />
+              Print PDF
             </button>
-
-            <a
-              href={waHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-3 py-1.5 text-xs font-semibold bg-[#25D366] hover:bg-[#1ebe5d] text-white rounded-lg inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-            >
-              <Send className="w-3.5 h-3.5" />
-              WhatsApp Bill
-            </a>
 
             <button
               type="button"
@@ -401,11 +425,14 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
 
           <div className="flex items-center gap-1.5">
             <label className="font-semibold text-slate-600">Date:</label>
-            <input
-              type="date"
+            <IndianDateInput
+              ariaLabel="Invoice date"
+              title="Invoice Date (DD/MM/YY)"
               value={invoiceDate}
-              onChange={(e) => setInvoiceDate(e.target.value)}
-              className="px-2 py-1 font-mono-num bg-white border border-[#DCE4E0] rounded focus:outline-none focus:border-[#128C7E]"
+              onChange={(val) => {
+                if (val) setInvoiceDate(val);
+              }}
+              className="min-w-[104px]"
             />
           </div>
 

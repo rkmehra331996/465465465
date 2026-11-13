@@ -181,15 +181,129 @@ export function buildHostingerReadme(): string {
 
 Upload & Run (Zero npm install needed):
 1. Open Hostinger hPanel -> Files -> File Manager -> public_html
-2. Upload this ZIP file and click "Extract" inside public_html
-   (Make sure index.html, api.php, .htaccess, and data/ folder are directly inside public_html)
-3. Open your website domain in Chrome/Mobile — OrderDesk is ready!
+2. Upload this ZIP file and click "Extract" directly inside public_html
+   (Make sure index.html, api.php, .htaccess, assets/, and data/ are inside public_html)
+3. Open your website domain in Chrome/Mobile — OrderDesk works immediately!
 
-Notes:
-- All orders, cities, cleaners, and user accounts are saved in data/portal-db.json automatically.
-- Optional: Edit config.php to add your Gemini API Key (for Hindi/Punjabi WhatsApp translation)
-  or Hostinger MySQL credentials if you also want a MySQL copy.
+Where does data get saved?
+- By default, ALL orders, customers, cities, cleaners, and accounts save automatically
+  inside: data/portal-db.json (no MySQL setup required).
+- Want Hostinger MySQL database too?
+  a) Open Hostinger hPanel -> Databases -> phpMyAdmin -> Import -> select "database.sql" from this ZIP.
+  b) Edit config.php and fill ORDERDESK_MYSQL_NAME, ORDERDESK_MYSQL_USER, ORDERDESK_MYSQL_PASS
+     (OR enter them in Admin Panel -> Hostinger Sync -> Hostinger MySQL).
+  Once filled, every order automatically saves to BOTH data/portal-db.json and MySQL!
 `;
+}
+
+function sqlStringLiteral(val: string): string {
+  return `'${val
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')}'`;
+}
+
+export interface SqlOrderInput {
+  id: string;
+  name: string;
+  number: string;
+  bookingDate: string;
+  address: string;
+  serviceName: string;
+  city: string;
+  qty: number | null;
+  price: number;
+  extraAmount: number;
+  cleanerName: string;
+  notes?: string;
+  status: string;
+  paymentStatus: string;
+  paidCommission?: number;
+  paymentClearedAt?: string;
+  paymentClearedByName?: string;
+  paymentNote?: string;
+  isExtraWork?: boolean;
+  createdById: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  completedByName?: string;
+}
+
+export function buildHostingerSqlFile(orders: SqlOrderInput[]): string {
+  const header = `-- OrderDesk / City Clean Company — Hostinger MySQL Database Dump
+-- Import this file via Hostinger hPanel -> Databases -> phpMyAdmin -> Import
+
+SET NAMES utf8mb4;
+
+CREATE TABLE IF NOT EXISTS orderdesk_orders (
+  id VARCHAR(64) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL DEFAULT '',
+  number VARCHAR(64) NOT NULL DEFAULT '',
+  booking_date VARCHAR(32) NOT NULL DEFAULT '',
+  address TEXT,
+  service_name VARCHAR(120) NOT NULL DEFAULT '',
+  city VARCHAR(120) NOT NULL DEFAULT '',
+  qty DOUBLE NULL,
+  price DOUBLE NOT NULL DEFAULT 0,
+  extra_amount DOUBLE NOT NULL DEFAULT 0,
+  cleaner_name VARCHAR(120) NOT NULL DEFAULT '',
+  notes TEXT,
+  status VARCHAR(32) NOT NULL DEFAULT 'active',
+  payment_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  paid_commission DOUBLE NULL,
+  payment_cleared_at VARCHAR(64) NULL,
+  payment_cleared_by_name VARCHAR(120) NULL,
+  payment_note TEXT,
+  is_extra_work TINYINT(1) NOT NULL DEFAULT 0,
+  created_by_id VARCHAR(64) NOT NULL DEFAULT '',
+  created_by_name VARCHAR(120) NOT NULL DEFAULT '',
+  created_at VARCHAR(64) NOT NULL DEFAULT '',
+  updated_at VARCHAR(64) NOT NULL DEFAULT '',
+  completed_at VARCHAR(64) NULL,
+  completed_by_name VARCHAR(120) NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+`;
+
+  if (orders.length === 0) {
+    return `${header}\n-- No orders yet.\n`;
+  }
+
+  const statements = orders.map((o) => {
+    const vals = [
+      sqlStringLiteral(o.id || ''),
+      sqlStringLiteral(o.name || ''),
+      sqlStringLiteral(o.number || ''),
+      sqlStringLiteral(o.bookingDate || ''),
+      sqlStringLiteral(o.address || ''),
+      sqlStringLiteral(o.serviceName || ''),
+      sqlStringLiteral(o.city || ''),
+      o.qty !== null && o.qty !== undefined && Number.isFinite(Number(o.qty)) ? String(Number(o.qty)) : 'NULL',
+      String(Number(o.price || 0)),
+      String(Number(o.extraAmount || 0)),
+      sqlStringLiteral(o.cleanerName || ''),
+      sqlStringLiteral(o.notes || ''),
+      sqlStringLiteral(o.status || 'active'),
+      sqlStringLiteral(o.paymentStatus || 'pending'),
+      o.paidCommission !== undefined && o.paidCommission !== null ? String(Number(o.paidCommission)) : 'NULL',
+      o.paymentClearedAt ? sqlStringLiteral(o.paymentClearedAt) : 'NULL',
+      o.paymentClearedByName ? sqlStringLiteral(o.paymentClearedByName) : 'NULL',
+      o.paymentNote ? sqlStringLiteral(o.paymentNote) : 'NULL',
+      o.isExtraWork ? '1' : '0',
+      sqlStringLiteral(o.createdById || ''),
+      sqlStringLiteral(o.createdByName || ''),
+      sqlStringLiteral(o.createdAt || ''),
+      sqlStringLiteral(o.updatedAt || ''),
+      o.completedAt ? sqlStringLiteral(o.completedAt) : 'NULL',
+      o.completedByName ? sqlStringLiteral(o.completedByName) : 'NULL',
+    ].join(', ');
+
+    return `INSERT INTO orderdesk_orders (id, name, number, booking_date, address, service_name, city, qty, price, extra_amount, cleaner_name, notes, status, payment_status, paid_commission, payment_cleared_at, payment_cleared_by_name, payment_note, is_extra_work, created_by_id, created_by_name, created_at, updated_at, completed_at, completed_by_name) VALUES (${vals}) ON DUPLICATE KEY UPDATE name=VALUES(name), number=VALUES(number), booking_date=VALUES(booking_date), address=VALUES(address), service_name=VALUES(service_name), city=VALUES(city), qty=VALUES(qty), price=VALUES(price), extra_amount=VALUES(extra_amount), cleaner_name=VALUES(cleaner_name), notes=VALUES(notes), status=VALUES(status), payment_status=VALUES(payment_status), paid_commission=VALUES(paid_commission), payment_cleared_at=VALUES(payment_cleared_at), payment_cleared_by_name=VALUES(payment_cleared_by_name), payment_note=VALUES(payment_note), is_extra_work=VALUES(is_extra_work), updated_at=VALUES(updated_at), completed_at=VALUES(completed_at), completed_by_name=VALUES(completed_by_name);`;
+  });
+
+  return `${header}\n${statements.join('\n')}\n`;
 }
 
 export function buildHostingerApiPhp(): string {
@@ -296,12 +410,136 @@ function loadDb(): array {
   return $parsed;
 }
 
-function saveDb(array $db): void {
+function resolveMysqlSettings(array $db): ?array {
+  $cfgName = defined('ORDERDESK_MYSQL_NAME') ? trim((string)ORDERDESK_MYSQL_NAME) : '';
+  $cfgUser = defined('ORDERDESK_MYSQL_USER') ? trim((string)ORDERDESK_MYSQL_USER) : '';
+  if ($cfgName !== '' && $cfgUser !== '') {
+    return [
+      'host' => (defined('ORDERDESK_MYSQL_HOST') && ORDERDESK_MYSQL_HOST) ? (string)ORDERDESK_MYSQL_HOST : 'localhost',
+      'port' => 3306,
+      'database' => $cfgName,
+      'user' => $cfgUser,
+      'password' => defined('ORDERDESK_MYSQL_PASS') ? (string)ORDERDESK_MYSQL_PASS : '',
+    ];
+  }
+  $h = $db['hostinger'] ?? [];
+  if (($h['mode'] ?? '') === 'mysql' && !empty($h['mysqlDatabase']) && !empty($h['mysqlUser'])) {
+    return [
+      'host' => !empty($h['mysqlHost']) ? (string)$h['mysqlHost'] : 'localhost',
+      'port' => (int)($h['mysqlPort'] ?? 3306) ?: 3306,
+      'database' => (string)$h['mysqlDatabase'],
+      'user' => (string)$h['mysqlUser'],
+      'password' => (string)($h['mysqlPassword'] ?? ''),
+    ];
+  }
+  return null;
+}
+
+function openMysqlPdo(array $cfg): PDO {
+  $dsn = sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4', $cfg['host'], $cfg['port'], $cfg['database']);
+  return new PDO($dsn, $cfg['user'], $cfg['password'], [
+    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_TIMEOUT => 8,
+  ]);
+}
+
+function ensureMysqlOrdersTable(PDO $pdo): void {
+  $pdo->exec("CREATE TABLE IF NOT EXISTS orderdesk_orders (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL DEFAULT '',
+    number VARCHAR(64) NOT NULL DEFAULT '',
+    booking_date VARCHAR(32) NOT NULL DEFAULT '',
+    address TEXT,
+    service_name VARCHAR(120) NOT NULL DEFAULT '',
+    city VARCHAR(120) NOT NULL DEFAULT '',
+    qty DOUBLE NULL,
+    price DOUBLE NOT NULL DEFAULT 0,
+    extra_amount DOUBLE NOT NULL DEFAULT 0,
+    cleaner_name VARCHAR(120) NOT NULL DEFAULT '',
+    notes TEXT,
+    status VARCHAR(32) NOT NULL DEFAULT 'active',
+    payment_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+    paid_commission DOUBLE NULL,
+    payment_cleared_at VARCHAR(64) NULL,
+    payment_cleared_by_name VARCHAR(120) NULL,
+    payment_note TEXT,
+    is_extra_work TINYINT(1) NOT NULL DEFAULT 0,
+    created_by_id VARCHAR(64) NOT NULL DEFAULT '',
+    created_by_name VARCHAR(120) NOT NULL DEFAULT '',
+    created_at VARCHAR(64) NOT NULL DEFAULT '',
+    updated_at VARCHAR(64) NOT NULL DEFAULT '',
+    completed_at VARCHAR(64) NULL,
+    completed_by_name VARCHAR(120) NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+}
+
+function syncOrdersToMysql(array $db, ?array $cfgOverride = null): int {
+  $cfg = $cfgOverride ?? resolveMysqlSettings($db);
+  if (!$cfg) return 0;
+  $pdo = openMysqlPdo($cfg);
+  ensureMysqlOrdersTable($pdo);
+  $stmt = $pdo->prepare("INSERT INTO orderdesk_orders
+    (id, name, number, booking_date, address, service_name, city, qty, price, extra_amount, cleaner_name, notes, status, payment_status, paid_commission, payment_cleared_at, payment_cleared_by_name, payment_note, is_extra_work, created_by_id, created_by_name, created_at, updated_at, completed_at, completed_by_name)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      name=VALUES(name), number=VALUES(number), booking_date=VALUES(booking_date), address=VALUES(address),
+      service_name=VALUES(service_name), city=VALUES(city), qty=VALUES(qty), price=VALUES(price),
+      extra_amount=VALUES(extra_amount), cleaner_name=VALUES(cleaner_name), notes=VALUES(notes),
+      status=VALUES(status), payment_status=VALUES(payment_status), paid_commission=VALUES(paid_commission),
+      payment_cleared_at=VALUES(payment_cleared_at), payment_cleared_by_name=VALUES(payment_cleared_by_name),
+      payment_note=VALUES(payment_note), is_extra_work=VALUES(is_extra_work), updated_at=VALUES(updated_at),
+      completed_at=VALUES(completed_at), completed_by_name=VALUES(completed_by_name)");
+  $orders = $db['orders'] ?? [];
+  foreach ($orders as $o) {
+    $stmt->execute([
+      (string)($o['id'] ?? ''),
+      (string)($o['name'] ?? ''),
+      (string)($o['number'] ?? ''),
+      (string)($o['bookingDate'] ?? ''),
+      (string)($o['address'] ?? ''),
+      (string)($o['serviceName'] ?? ''),
+      (string)($o['city'] ?? ''),
+      isset($o['qty']) && $o['qty'] !== null ? (float)$o['qty'] : null,
+      (float)($o['price'] ?? 0),
+      (float)($o['extraAmount'] ?? 0),
+      (string)($o['cleanerName'] ?? ''),
+      (string)($o['notes'] ?? ''),
+      (string)($o['status'] ?? 'active'),
+      (string)($o['paymentStatus'] ?? 'pending'),
+      isset($o['paidCommission']) && $o['paidCommission'] !== null ? (float)$o['paidCommission'] : null,
+      $o['paymentClearedAt'] ?? null,
+      $o['paymentClearedByName'] ?? null,
+      $o['paymentNote'] ?? null,
+      !empty($o['isExtraWork']) ? 1 : 0,
+      (string)($o['createdById'] ?? ''),
+      (string)($o['createdByName'] ?? ''),
+      (string)($o['createdAt'] ?? ''),
+      (string)($o['updatedAt'] ?? ''),
+      $o['completedAt'] ?? null,
+      $o['completedByName'] ?? null,
+    ]);
+  }
+  return count($orders);
+}
+
+function saveDb(array $db, bool $skipMysqlSync = false): void {
   if (!is_dir(DB_DIR)) {
     mkdir(DB_DIR, 0755, true);
   }
   $json = json_encode($db, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
   file_put_contents(DB_PATH, $json, LOCK_EX);
+  if (!$skipMysqlSync) {
+    $cfgName = defined('ORDERDESK_MYSQL_NAME') ? trim((string)ORDERDESK_MYSQL_NAME) : '';
+    $h = $db['hostinger'] ?? [];
+    $shouldAuto = ($cfgName !== '') || (($h['mode'] ?? '') === 'mysql' && !empty($h['autoSync']));
+    if ($shouldAuto) {
+      try {
+        syncOrdersToMysql($db);
+      } catch (Throwable $e) {
+        // Keep JSON storage reliable even if MySQL is unreachable
+      }
+    }
+  }
 }
 
 function signToken(string $userId, string $secret): string {
@@ -433,11 +671,23 @@ if ($method === 'GET' && $uriPath === '/api/auth/me') {
 // Config
 if ($method === 'GET' && $uriPath === '/api/config') {
   requireAuth($db);
+  $staff = [];
+  foreach ($db['users'] as $u) {
+    if (!empty($u['active'])) {
+      $staff[] = [
+        'id' => (string)($u['id'] ?? ''),
+        'name' => (string)($u['name'] ?? ''),
+        'username' => (string)($u['username'] ?? ''),
+        'role' => (string)($u['role'] ?? 'telecaller'),
+      ];
+    }
+  }
   jsonResponse([
     'cities' => $db['cities'],
     'cleaners' => $db['cleaners'],
     'services' => DEFAULT_SERVICES,
     'cleanerProfiles' => empty($db['cleanerProfiles']) ? (object)[] : $db['cleanerProfiles'],
+    'telecallers' => $staff,
   ]);
 }
 
@@ -622,7 +872,7 @@ if ($method === 'GET' && $uriPath === '/api/orders') {
   $user = requireAuth($db);
   $visible = ($user['role'] ?? '') === 'super_admin'
     ? $db['orders']
-    : array_values(array_filter($db['orders'], fn($o) => ($o['createdById'] ?? '') === ($user['id'] ?? '')));
+    : array_values(array_filter($db['orders'], fn($o) => ($o['createdById'] ?? '') === ($user['id'] ?? '') || ($o['transferredFromId'] ?? '') === ($user['id'] ?? '')));
   jsonResponse(['orders' => $visible]);
 }
 
@@ -759,6 +1009,64 @@ if ($method === 'POST' && $uriPath === '/api/orders/bulk-payment') {
   }
   saveDb($db);
   jsonResponse(['ok' => true, 'orders' => $updatedOrders]);
+}
+
+if ($method === 'POST' && $uriPath === '/api/orders/transfer') {
+  $user = requireAuth($db);
+  $ids = is_array($body['ids'] ?? null) ? array_values(array_filter(array_map('strval', $body['ids']))) : [];
+  $targetUserId = trim((string)($body['targetUserId'] ?? ''));
+  if (empty($ids)) jsonResponse(['error' => 'No order IDs provided'], 400);
+  if ($targetUserId === '') jsonResponse(['error' => 'Target telecaller is required'], 400);
+
+  $targetUser = null;
+  foreach ($db['users'] as $u) {
+    if (($u['id'] ?? '') === $targetUserId && !empty($u['active'])) {
+      $targetUser = $u;
+      break;
+    }
+  }
+  if ($targetUser === null) {
+    jsonResponse(['error' => 'Selected telecaller account was not found or is inactive'], 404);
+  }
+
+  $idSet = array_flip($ids);
+  $now = gmdate('c');
+  $updatedOrders = [];
+  $unauthorizedCount = 0;
+
+  foreach ($db['orders'] as $i => $o) {
+    if (!isset($idSet[$o['id']])) continue;
+    if (($user['role'] ?? '') !== 'super_admin' && ($o['createdById'] ?? '') !== ($user['id'] ?? '')) {
+      $unauthorizedCount++;
+      continue;
+    }
+    if (($o['createdById'] ?? '') === $targetUser['id']) {
+      $updatedOrders[] = $o;
+      continue;
+    }
+    $db['orders'][$i]['transferredFromId'] = ($o['createdById'] ?? '') !== '' ? $o['createdById'] : ($user['id'] ?? '');
+    $db['orders'][$i]['transferredFromName'] = ($o['createdByName'] ?? '') !== '' ? $o['createdByName'] : ($user['name'] ?? '');
+    $db['orders'][$i]['transferredAt'] = $now;
+    $db['orders'][$i]['createdById'] = $targetUser['id'];
+    $db['orders'][$i]['createdByName'] = $targetUser['name'];
+    $db['orders'][$i]['updatedAt'] = $now;
+    $updatedOrders[] = $db['orders'][$i];
+  }
+
+  if (empty($updatedOrders)) {
+    jsonResponse([
+      'error' => $unauthorizedCount > 0
+        ? 'Not authorized to pass one or more selected orders'
+        : 'No matching orders found',
+    ], $unauthorizedCount > 0 ? 403 : 404);
+  }
+
+  saveDb($db);
+  jsonResponse([
+    'ok' => true,
+    'targetUser' => ['id' => $targetUser['id'], 'name' => $targetUser['name']],
+    'orders' => $updatedOrders,
+  ]);
 }
 
 if ($method === 'POST' && $uriPath === '/api/orders/bulk-import') {
@@ -968,7 +1276,7 @@ if ($method === 'PUT' && $uriPath === '/api/hostinger/config') {
   if (isset($body['webhookUrl'])) $h['webhookUrl'] = trim((string)$body['webhookUrl']);
   if (!empty($body['webhookSecret'])) $h['webhookSecret'] = (string)$body['webhookSecret'];
   $db['hostinger'] = $h;
-  saveDb($db);
+  saveDb($db, true);
   jsonResponse(['config' => [
     'mode' => $h['mode'],
     'autoSync' => (bool)$h['autoSync'],
@@ -981,6 +1289,49 @@ if ($method === 'PUT' && $uriPath === '/api/hostinger/config') {
     'hasWebhookSecret' => !empty($h['webhookSecret']),
     'lastSyncedAt' => $h['lastSyncedAt'] ?? null,
   ]]);
+}
+
+if ($method === 'POST' && $uriPath === '/api/hostinger/test') {
+  $user = requireAuth($db);
+  requireSuperAdmin($user);
+  $h = $db['hostinger'];
+  $mode = $body['mode'] ?? ($h['mode'] ?? 'none');
+  if ($mode === 'mysql') {
+    $cfg = [
+      'host' => trim((string)($body['mysqlHost'] ?? ($h['mysqlHost'] ?? 'localhost'))) ?: 'localhost',
+      'port' => (int)($body['mysqlPort'] ?? ($h['mysqlPort'] ?? 3306)) ?: 3306,
+      'database' => trim((string)($body['mysqlDatabase'] ?? ($h['mysqlDatabase'] ?? ''))),
+      'user' => trim((string)($body['mysqlUser'] ?? ($h['mysqlUser'] ?? ''))),
+      'password' => !empty($body['mysqlPassword']) ? (string)$body['mysqlPassword'] : (string)($h['mysqlPassword'] ?? ''),
+    ];
+    if (!$cfg['database'] || !$cfg['user']) {
+      jsonResponse(['error' => 'MySQL Database and Username are required'], 400);
+    }
+    try {
+      $pdo = openMysqlPdo($cfg);
+      ensureMysqlOrdersTable($pdo);
+      jsonResponse(['ok' => true, 'message' => 'Hostinger MySQL connected & orderdesk_orders table verified!']);
+    } catch (Throwable $e) {
+      jsonResponse(['error' => $e->getMessage()], 500);
+    }
+  }
+  jsonResponse(['error' => 'Select Hostinger MySQL to test connection'], 400);
+}
+
+if ($method === 'POST' && $uriPath === '/api/hostinger/sync') {
+  $user = requireAuth($db);
+  requireSuperAdmin($user);
+  try {
+    $cfg = resolveMysqlSettings($db);
+    if (!$cfg) jsonResponse(['error' => 'Configure MySQL settings first'], 400);
+    $count = syncOrdersToMysql($db, $cfg);
+    $syncedAt = gmdate('c');
+    $db['hostinger']['lastSyncedAt'] = $syncedAt;
+    saveDb($db, true);
+    jsonResponse(['ok' => true, 'syncedCount' => $count, 'lastSyncedAt' => $syncedAt, 'message' => $count . ' orders MySQL me sync ho gaye!']);
+  } catch (Throwable $e) {
+    jsonResponse(['error' => $e->getMessage()], 500);
+  }
 }
 
 // Optional Translation via Gemini REST API (if configured in config.php)

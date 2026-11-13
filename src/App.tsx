@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Plus } from 'lucide-react';
 import {
   bulkCompleteOrders,
   bulkImportOrders,
@@ -12,6 +13,7 @@ import {
   getOrderTotal,
   getStoredToken,
   logout,
+  transferOrders,
   updateOrder,
 } from './lib/api';
 import { LoginView } from './components/LoginView';
@@ -49,6 +51,7 @@ const DEFAULT_CONFIG: PortalConfig = {
   cleaners: ['Jagdish', 'Raaj', 'Manish', 'Gurmeet', 'Aman', 'Karan', 'Arun'],
   services: [...SERVICE_OPTIONS],
   cleanerProfiles: {},
+  telecallers: [],
 };
 
 export default function App() {
@@ -60,6 +63,7 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('active');
   const [calcOpen, setCalcOpen] = useState<boolean>(false);
+  const [newOrderOpen, setNewOrderOpen] = useState<boolean>(false);
   const [dispatchCleaner, setDispatchCleaner] = useState<string | undefined>(undefined);
   const [dispatchSelectedIds, setDispatchSelectedIds] = useState<string[] | undefined>(undefined);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -134,6 +138,7 @@ export default function App() {
     setUser(null);
     setOrders([]);
     setCalcOpen(false);
+    setNewOrderOpen(false);
   };
 
   const handleAddOrder = async (payload: NewOrderPayload) => {
@@ -245,6 +250,23 @@ export default function App() {
     setDispatchCleaner(cleanerName);
     setDispatchSelectedIds(selectedIds);
     setActiveTab('whatsapp');
+  };
+
+  const handleTransferOrders = async (ids: string[], targetUserId: string) => {
+    try {
+      const res = await transferOrders(ids, targetUserId);
+      const updatedMap = new Map(res.orders.map((o) => [o.id, o]));
+      setOrders((prev) => prev.map((o) => updatedMap.get(o.id) || o));
+      const count = res.orders.length;
+      notify(
+        `${count} order${count > 1 ? 's' : ''} ${res.targetUser.name} ke dashboard me pass ho ${
+          count > 1 ? 'gaye' : 'gaya'
+        }!`
+      );
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Order pass failed', 'error');
+      throw err;
+    }
   };
 
   const stats = useMemo(() => {
@@ -403,18 +425,17 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
-            {activeTab !== 'whatsapp' && (
-              <button
-                type="button"
-                onClick={() => {
-                  setDispatchSelectedIds(undefined);
-                  setActiveTab('whatsapp');
-                }}
-                className="px-3.5 py-2 text-xs font-semibold bg-[#25D366] hover:bg-[#1ebe5d] text-white rounded-lg transition-colors cursor-pointer whitespace-nowrap"
-              >
-                Open WhatsApp Auto-Message
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('active');
+                setNewOrderOpen(true);
+              }}
+              className="px-6 py-3 text-sm sm:text-base font-bold bg-red-600 hover:bg-red-700 text-white rounded-xl inline-flex items-center gap-2 shadow-md transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <Plus className="w-5 h-5" />
+              New Order Entry
+            </button>
           </div>
         </div>
 
@@ -425,11 +446,14 @@ export default function App() {
             config={config}
             currentUser={user}
             loading={ordersLoading}
+            newOrderOpen={newOrderOpen}
+            onNewOrderOpenChange={setNewOrderOpen}
             onAddOrder={handleAddOrder}
             onUpdateOrder={handleUpdateOrder}
             onDeleteOrder={handleDeleteOrder}
             onBulkComplete={handleBulkComplete}
             onBulkImport={handleBulkImportOrders}
+            onTransferOrders={handleTransferOrders}
             onOpenWhatsAppForCleaner={handleOpenWhatsAppForCleaner}
             onNotify={notify}
           />
@@ -441,7 +465,9 @@ export default function App() {
             config={config}
             currentUser={user}
             onUpdateOrder={handleUpdateOrder}
+            onDeleteOrder={handleDeleteOrder}
             onBulkComplete={handleBulkComplete}
+            onTransferOrders={handleTransferOrders}
             onOpenWhatsAppForCleaner={handleOpenWhatsAppForCleaner}
             onNotify={notify}
           />

@@ -456,7 +456,7 @@ export const TelecallerManager: React.FC<TelecallerManagerProps> = ({
                   Direct Upload Bundle (No npm install / No Node needed)
                 </p>
                 <p className="text-[11px] text-slate-600 mt-0.5">
-                  Upload ZIP in Hostinger <span className="font-mono-num font-semibold">public_html</span> → Extract → Open Domain. Includes built app, PHP API & current {orders.length} orders.
+                  Upload ZIP in <span className="font-mono-num font-semibold">public_html</span> → Extract → Open Domain. Includes built app, <span className="font-mono-num">api.php</span>, <span className="font-mono-num">database.sql</span> (MySQL) &amp; <span className="font-mono-num">data/portal-db.json</span> ({orders.length} orders).
                 </p>
               </div>
               <button
