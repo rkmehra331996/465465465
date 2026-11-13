@@ -1,0 +1,6 @@
+{
+  "name": "OrderDesk — Telecaller Excel & WhatsApp Portal",
+  "description": "WhatsApp-inspired Excel data entry portal for telecallers with date-to-date filtering, percentage calculator, completed orders tracking, cleaner bulk dispatch formatting, and Hindi/Punjabi auto-translation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

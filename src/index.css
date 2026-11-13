@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+    --font-sans: "DM Sans", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #f4f7f5;
+    color: #0f172a;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono-num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Subtle spreadsheet scrollbar styling */
+.sheet-scroll::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+.sheet-scroll::-webkit-scrollbar-track {
+  background: #eff4f1;
+}
+
+.sheet-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5d0;
+  border-radius: 4px;
+}
+
+.sheet-scroll::-webkit-scrollbar-thumb:hover {
+  background: #94a3a0;
+}
+
+.font-signature {
+  font-family: "Brush Script MT", "Segoe Script", "Snell Roundhand", cursive;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .invoice-modal-backdrop {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  .invoice-modal-shell {
+    max-width: 100% !important;
+    max-height: none !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+
+  .invoice-print-sheet,
+  .invoice-print-sheet * {
+    visibility: visible !important;
+  }
+
+  .invoice-print-sheet {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: 100% !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 16px !important;
+  }
+}

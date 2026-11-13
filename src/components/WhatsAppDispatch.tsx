@@ -1,0 +1,479 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Check,
+  CheckCircle2,
+  Copy,
+  Languages,
+  Loader2,
+  MessageCircle,
+  Send,
+} from 'lucide-react';
+import {
+  buildCleanerWhatsAppMessage,
+  toOrderNumberEmoji,
+  translateMessage,
+} from '../lib/api';
+import type { Order, TranslateTarget } from '../types';
+
+interface WhatsAppDispatchProps {
+  orders: Order[];
+  initialCleaner?: string;
+  initialSelectedIds?: string[];
+  onBulkComplete: (ids: string[]) => Promise<void>;
+  onNotify: (msg: string, type?: 'success' | 'error') => void;
+}
+
+const LANGUAGE_OPTIONS: { id: TranslateTarget; label: string }[] = [
+  { id: 'english', label: 'English (Original)' },
+  { id: 'hindi', label: 'Hindi (हिन्दी)' },
+  { id: 'punjabi', label: 'Punjabi (ਪੰਜਾਬੀ)' },
+  { id: 'bilingual_hi', label: 'English + Hindi' },
+  { id: 'bilingual_pa', label: 'English + Punjabi' },
+];
+
+export const WhatsAppDispatch: React.FC<WhatsAppDispatchProps> = ({
+  orders,
+  initialCleaner,
+  initialSelectedIds,
+  onBulkComplete,
+  onNotify,
+}) => {
+  const activeOrders = useMemo(
+    () => orders.filter((o) => o.status === 'active'),
+    [orders]
+  );
+
+  const cleanerSummaries = useMemo(() => {
+    const map = new Map<string, { name: string; count: number; totalAmount: number }>();
+    for (const o of activeOrders) {
+      const key = o.cleanerName.trim().toLowerCase();
+      if (!key) continue;
+      const existing = map.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.totalAmount += Number(o.price || 0);
+      } else {
+        map.set(key, {
+          name: o.cleanerName.trim(),
+          count: 1,
+          totalAmount: Number(o.price || 0),
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.count - a.count);
+  }, [activeOrders]);
+
+  const [selectedCleaner, setSelectedCleaner] = useState<string>(
+    initialCleaner || cleanerSummaries[0]?.name || 'all'
+  );
+  const [dateFilter, setDateFilter] = useState<string>('');
+  const [compactMode, setCompactMode] = useState<boolean>(true);
+  const [checkedIds, setCheckedIds] = useState<string[]>([]);
+  const [targetLang, setTargetLang] = useState<TranslateTarget>('english');
+  const [messageText, setMessageText] = useState<string>('');
+  const [translating, setTranslating] = useState<boolean>(false);
+  const [copied, setCopied] = useState<boolean>(false);
+  const [completing, setCompleting] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (initialCleaner) {
+      setSelectedCleaner(initialCleaner);
+    } else if (selectedCleaner === 'all' && cleanerSummaries.length > 0 && !initialSelectedIds?.length) {
+      setSelectedCleaner(cleanerSummaries[0].name);
+    }
+  }, [initialCleaner, cleanerSummaries.length]);
+
+  const matchingOrders = useMemo(() => {
+    return activeOrders.filter((o) => {
+      if (
+        selectedCleaner !== 'all' &&
+        o.cleanerName.trim().toLowerCase() !== selectedCleaner.trim().toLowerCase()
+      ) {
+        return false;
+      }
+      if (dateFilter && o.bookingDate !== dateFilter) {
+        return false;
+      }
+      return true;
+    });
+  }, [activeOrders, selectedCleaner, dateFilter]);
+
+  useEffect(() => {
+    if (initialSelectedIds && initialSelectedIds.length > 0) {
+      const valid = matchingOrders
+        .filter((o) => initialSelectedIds.includes(o.id))
+        .map((o) => o.id);
+      setCheckedIds(valid.length > 0 ? valid : matchingOrders.map((o) => o.id));
+    } else {
+      setCheckedIds(matchingOrders.map((o) => o.id));
+    }
+  }, [selectedCleaner, dateFilter, matchingOrders.length]);
+
+  const includedOrders = useMemo(
+    () => matchingOrders.filter((o) => checkedIds.includes(o.id)),
+    [matchingOrders, checkedIds]
+  );
+
+  const baseMessage = useMemo(() => {
+    const label = selectedCleaner === 'all' ? 'All Cleaners' : selectedCleaner;
+    return buildCleanerWhatsAppMessage(label, includedOrders, compactMode);
+  }, [selectedCleaner, includedOrders, compactMode]);
+
+  useEffect(() => {
+    if (targetLang === 'english') {
+      setMessageText(baseMessage);
+      return;
+    }
+
+    if (!baseMessage) {
+      setMessageText('');
+      return;
+    }
+
+    let cancelled = false;
+    const runTranslate = async () => {
+      setTranslating(true);
+      try {
+        const translated = await translateMessage(baseMessage, targetLang);
+        if (!cancelled) {
+          setMessageText(translated);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          onNotify(
+            err instanceof Error ? err.message : 'Auto-translate failed, showing English text',
+            'error'
+          );
+          setMessageText(baseMessage);
+        }
+      } finally {
+        if (!cancelled) setTranslating(false);
+      }
+    };
+
+    runTranslate();
+    return () => {
+      cancelled = true;
+    };
+  }, [baseMessage, targetLang]);
+
+  const toggleOrderId = (id: string) => {
+    setCheckedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleCopy = async () => {
+    if (!messageText.trim()) return;
+    try {
+      await navigator.clipboard.writeText(messageText);
+      setCopied(true);
+      onNotify('WhatsApp message copied! Paste directly in your group.');
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      onNotify('Could not copy automatically. Please copy from the text box.', 'error');
+    }
+  };
+
+  const handleMarkDispatchedComplete = async () => {
+    if (checkedIds.length === 0) return;
+    setCompleting(true);
+    try {
+      await onBulkComplete(checkedIds);
+      onNotify(`${checkedIds.length} orders moved to Completed List.`);
+    } finally {
+      setCompleting(false);
+    }
+  };
+
+  const whatsappShareUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(messageText)}`;
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+      <div className="lg:col-span-5 bg-white border border-[#DCE4E0] rounded-xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-[#DCE4E0] bg-[#EFF4F1]">
+          <h2 className="font-display text-sm font-bold text-slate-900">
+            1. Select Cleaner & Orders
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            All orders for the chosen cleaner are auto-numbered together (1️⃣, 2️⃣, 3️⃣...) in one message.
+          </p>
+        </div>
+
+        <div className="p-4 space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-2">
+              Active Cleaners
+            </label>
+            {cleanerSummaries.length === 0 ? (
+              <div className="text-xs text-slate-500 p-3 bg-[#F7F9F8] rounded-lg border border-[#DCE4E0]">
+                No active orders found. Add orders in the Active Orders sheet first.
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {cleanerSummaries.map((c) => {
+                  const isActive =
+                    selectedCleaner.toLowerCase() === c.name.toLowerCase();
+                  return (
+                    <button
+                      key={c.name}
+                      type="button"
+                      onClick={() => setSelectedCleaner(c.name)}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
+                        isActive
+                          ? 'bg-[#075E54] text-white border-[#075E54]'
+                          : 'bg-[#F7F9F8] text-slate-800 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                      }`}
+                    >
+                      {c.name} ({c.count})
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setSelectedCleaner('all')}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
+                    selectedCleaner === 'all'
+                      ? 'bg-[#075E54] text-white border-[#075E54]'
+                      : 'bg-[#F7F9F8] text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                  }`}
+                >
+                  All ({activeOrders.length})
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Filter by Date (Optional)
+              </label>
+              <input
+                type="date"
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-xs font-mono-num bg-white border border-[#DCE4E0] rounded-lg focus:outline-none focus:border-[#128C7E]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Message Style
+              </label>
+              <div className="grid grid-cols-2 gap-1 p-1 bg-[#EFF4F1] rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => setCompactMode(true)}
+                  className={`py-1 text-xs font-medium rounded transition-colors cursor-pointer ${
+                    compactMode
+                      ? 'bg-white text-[#075E54] shadow-sm'
+                      : 'text-slate-600'
+                  }`}
+                >
+                  Short
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCompactMode(false)}
+                  className={`py-1 text-xs font-medium rounded transition-colors cursor-pointer ${
+                    !compactMode
+                      ? 'bg-white text-[#075E54] shadow-sm'
+                      : 'text-slate-600'
+                  }`}
+                >
+                  Detailed
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="border border-[#DCE4E0] rounded-lg overflow-hidden">
+            <div className="px-3 py-2 bg-[#F7F9F8] border-b border-[#DCE4E0] flex items-center justify-between text-xs">
+              <span className="font-semibold text-slate-700">
+                Included Orders ({includedOrders.length} / {matchingOrders.length})
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setCheckedIds(
+                    checkedIds.length === matchingOrders.length
+                      ? []
+                      : matchingOrders.map((o) => o.id)
+                  )
+                }
+                className="text-[#128C7E] font-medium hover:underline cursor-pointer"
+              >
+                {checkedIds.length === matchingOrders.length
+                  ? 'Unselect All'
+                  : 'Select All'}
+              </button>
+            </div>
+
+            <div className="max-h-[340px] overflow-y-auto divide-y divide-[#DCE4E0]">
+              {matchingOrders.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-500">
+                  No active orders for this cleaner/date filter.
+                </div>
+              ) : (
+                matchingOrders.map((o, idx) => {
+                  const checked = checkedIds.includes(o.id);
+                  return (
+                    <label
+                      key={o.id}
+                      className={`flex items-start gap-2.5 p-3 cursor-pointer transition-colors ${
+                        checked ? 'bg-[#F2FBF6]' : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleOrderId(o.id)}
+                        className="mt-0.5 rounded border-slate-300 accent-[#128C7E]"
+                      />
+                      <div className="min-w-0 flex-1 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-slate-900 truncate">
+                            {toOrderNumberEmoji(idx + 1)} {o.name || o.number} ({o.serviceName})
+                          </span>
+                          <span className="font-mono-num font-semibold text-[#075E54] shrink-0">
+                            ₹{o.price}
+                          </span>
+                        </div>
+                        <div className="text-slate-500 font-mono-num mt-0.5">
+                          {o.number} · {o.city}
+                          {o.bookingDate ? ` · ${o.bookingDate}` : ''}
+                          {o.qty ? ` · Qty: ${o.qty}` : ''}
+                        </div>
+                        {o.address && (
+                          <div className="text-slate-600 truncate mt-0.5">{o.address}</div>
+                        )}
+                      </div>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="lg:col-span-7 bg-white border border-[#DCE4E0] rounded-xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-[#DCE4E0] bg-[#075E54] text-white flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <MessageCircle className="w-5 h-5 text-[#25D366]" />
+            <div>
+              <h2 className="font-display text-sm font-bold">
+                2. Auto-Typed WhatsApp Group Message
+              </h2>
+              <p className="text-xs text-emerald-100/80">
+                Translate to Hindi or Punjabi and share straight to WhatsApp
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 space-y-4">
+          <div>
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 mb-2">
+              <Languages className="w-4 h-4 text-[#128C7E]" />
+              <span>Auto-Translate Language</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {LANGUAGE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  disabled={translating}
+                  onClick={() => setTargetLang(opt.id)}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
+                    targetLang === opt.id
+                      ? 'bg-[#128C7E] text-white border-[#128C7E]'
+                      : 'bg-[#F7F9F8] text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-[#EFEAE2] border border-[#DCE4E0] rounded-xl p-4 relative">
+            {translating && (
+              <div className="absolute inset-0 bg-white/80 backdrop-blur-[1px] rounded-xl flex items-center justify-center gap-2 z-10 text-xs font-semibold text-[#075E54]">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Translating {includedOrders.length} orders into{' '}
+                {LANGUAGE_OPTIONS.find((l) => l.id === targetLang)?.label}...
+              </div>
+            )}
+
+            <div className="bg-[#D9FDD3] border border-[#C3EAB9] rounded-lg p-3 shadow-xs">
+              <textarea
+                aria-label="WhatsApp dispatch message preview"
+                rows={14}
+                value={messageText}
+                onChange={(e) => setMessageText(e.target.value)}
+                placeholder="Select a cleaner on the left to auto-generate numbered orders..."
+                className="w-full bg-transparent text-[13px] leading-relaxed text-slate-900 font-sans resize-y focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <a
+                href={messageText.trim() ? whatsappShareUrl : undefined}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => {
+                  if (!messageText.trim()) e.preventDefault();
+                }}
+                className={`px-4 py-2.5 text-sm font-semibold rounded-lg flex items-center gap-2 transition-colors whitespace-nowrap ${
+                  messageText.trim()
+                    ? 'bg-[#25D366] hover:bg-[#1ebe5d] text-white cursor-pointer'
+                    : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                }`}
+              >
+                <Send className="w-4 h-4" />
+                Share to WhatsApp Group
+              </a>
+
+              <button
+                type="button"
+                disabled={!messageText.trim()}
+                onClick={handleCopy}
+                className="px-4 py-2.5 text-sm font-semibold bg-white border border-[#DCE4E0] hover:bg-[#F7F9F8] disabled:opacity-50 text-slate-800 rounded-lg flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                {copied ? (
+                  <>
+                    <Check className="w-4 h-4 text-[#128C7E]" />
+                    Copied!
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4" />
+                    Copy Message
+                  </>
+                )}
+              </button>
+            </div>
+
+            {checkedIds.length > 0 && (
+              <button
+                type="button"
+                disabled={completing}
+                onClick={handleMarkDispatchedComplete}
+                className="px-3.5 py-2.5 text-xs font-semibold bg-[#EFF4F1] hover:bg-[#DCE4E0] text-[#075E54] rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                {completing
+                  ? 'Moving...'
+                  : `Mark ${checkedIds.length} Orders Complete`}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
