@@ -511,6 +511,7 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
                     <span className="text-slate-500">Phone Number:</span>{' '}
                     <span className="font-mono-num font-semibold text-slate-900">
                       {order.number || '—'}
+                      {order.altNumber ? ` / Alt: ${order.altNumber}` : ''}
                     </span>
                   </div>
                   <div>

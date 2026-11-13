@@ -24,6 +24,7 @@ import {
 import { ConfirmDialog } from './ConfirmDialog';
 import { IndianDateInput } from './IndianDateInput';
 import { InvoiceModal } from './InvoiceModal';
+import { ServiceEditModal } from './ServiceEditModal';
 import { TransferOrderModal } from './TransferOrderModal';
 import type { Order, PortalConfig, UserPublic } from '../types';
 
@@ -43,6 +44,7 @@ type InlineField =
   | 'bookingDate'
   | 'name'
   | 'number'
+  | 'altNumber'
   | 'serviceName'
   | 'city'
   | 'address'
@@ -65,7 +67,9 @@ function formatSingleOrderForWhatsApp(order: Order, indexNumber = 1): string {
   const customer = order.name || (order.isExtraWork ? 'Extra / On-Site Work' : 'Customer');
   const lines = [
     `${serial} *${customer}*`,
-    ...(order.number ? [`Phone: ${order.number}`] : []),
+    ...(order.number
+      ? [`Phone: ${order.number}${order.altNumber ? ` | Alt: ${order.altNumber}` : ''}`]
+      : []),
     `Service: ${order.serviceName} | City: ${order.city}`,
     ...(order.bookingDate ? [`Date: ${formatIndianDate(order.bookingDate)}`] : []),
     ...(order.address ? [`Address: ${order.address}`] : []),
@@ -104,6 +108,7 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
   const [editingCustomDate, setEditingCustomDate] = useState(false);
 
   const [invoiceOrder, setInvoiceOrder] = useState<Order | null>(null);
+  const [serviceEditOrder, setServiceEditOrder] = useState<Order | null>(null);
   const [transferTargetIds, setTransferTargetIds] = useState<string[] | null>(null);
   const [deleteTargetOrder, setDeleteTargetOrder] = useState<Order | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -262,7 +267,32 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
       return;
     }
 
-    if (field === 'number' && !raw) return;
+    if (field === 'number') {
+      const cleanPhone = raw.replace(/\D/g, '');
+      if (!cleanPhone) return;
+      if (cleanPhone.length !== 10) {
+        onNotify('Phone Number must be exactly 10 digits.', 'error');
+        return;
+      }
+      if (cleanPhone === order.number) return;
+      await onUpdateOrder(order.id, { number: cleanPhone });
+      return;
+    }
+    if (field === 'altNumber') {
+      const cleanAlt = raw.replace(/\D/g, '');
+      if (!cleanAlt) {
+        if (!order.altNumber) return;
+        await onUpdateOrder(order.id, { altNumber: '' });
+        return;
+      }
+      if (cleanAlt.length !== 10) {
+        onNotify('Alternate Number must be 10 digits (or leave empty to clear).', 'error');
+        return;
+      }
+      if (cleanAlt === order.altNumber) return;
+      await onUpdateOrder(order.id, { altNumber: cleanAlt });
+      return;
+    }
     if ((field === 'serviceName' || field === 'city' || field === 'cleanerName') && !raw) return;
     if (raw === String(order[field] ?? '')) return;
     await onUpdateOrder(order.id, { [field]: raw });
@@ -676,16 +706,29 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                               </td>
 
                               <td
-                                onClick={() => !isEditing('number') && startInlineEdit(order, 'number')}
-                                className="py-2 px-2.5 font-mono-num text-slate-800 cursor-text"
+                                onClick={() =>
+                                  !isEditing('number') &&
+                                  !isEditing('altNumber') &&
+                                  startInlineEdit(order, 'number')
+                                }
+                                className="py-2 px-2.5 font-mono-num text-slate-800 cursor-text group"
                                 title="Click to edit phone"
                               >
                                 {isEditing('number') ? (
                                   <input
                                     autoFocus
                                     type="text"
+                                    inputMode="numeric"
+                                    minLength={10}
+                                    maxLength={10}
+                                    pattern="\d{10}"
+                                    title="Minimum 10, maximum 10 digits"
                                     value={editingValue}
-                                    onChange={(e) => setEditingValue(e.target.value)}
+                                    onChange={(e) =>
+                                      setEditingValue(
+                                        e.target.value.replace(/\D/g, '').slice(0, 10)
+                                      )
+                                    }
                                     onBlur={() => commitInlineEdit(order)}
                                     onKeyDown={(e) => {
                                       if (e.key === 'Enter') commitInlineEdit(order);
@@ -693,80 +736,78 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                                     }}
                                     className="w-full px-1.5 py-0.5 text-xs border border-[#128C7E] rounded bg-white"
                                   />
+                                ) : isEditing('altNumber') ? (
+                                  <div className="space-y-1" onClick={(e) => e.stopPropagation()}>
+                                    <div>{order.number || '—'}</div>
+                                    <input
+                                      autoFocus
+                                      type="text"
+                                      inputMode="numeric"
+                                      maxLength={10}
+                                      placeholder="Alt 10-digit"
+                                      title="10-digit Alternate Number (clear to remove)"
+                                      value={editingValue}
+                                      onChange={(e) =>
+                                        setEditingValue(
+                                          e.target.value.replace(/\D/g, '').slice(0, 10)
+                                        )
+                                      }
+                                      onBlur={() => commitInlineEdit(order)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') commitInlineEdit(order);
+                                        if (e.key === 'Escape') setEditingCell(null);
+                                      }}
+                                      className="w-full px-1.5 py-0.5 text-[11px] border border-[#128C7E] rounded bg-white"
+                                    />
+                                  </div>
                                 ) : (
-                                  order.number || '—'
+                                  <div>
+                                    <span>{order.number || '—'}</span>
+                                    {order.altNumber ? (
+                                      <div
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          startInlineEdit(order, 'altNumber');
+                                        }}
+                                        title="Click to edit Alternate Number"
+                                        className="text-[11px] text-slate-500 hover:text-[#075E54] cursor-pointer"
+                                      >
+                                        Alt: {order.altNumber}
+                                      </div>
+                                    ) : (
+                                      order.number && (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            startInlineEdit(order, 'altNumber');
+                                          }}
+                                          className="hidden group-hover:block text-[10px] font-sans font-semibold text-[#128C7E] hover:underline cursor-pointer"
+                                        >
+                                          + Alt No.
+                                        </button>
+                                      )
+                                    )}
+                                  </div>
                                 )}
                               </td>
 
                               <td
-                                onClick={() => !isEditing('serviceName') && startInlineEdit(order, 'serviceName')}
-                                className="py-2 px-2.5 text-slate-800 cursor-pointer"
-                                title="Click to change or combine services"
+                                onClick={() => {
+                                  if (isSentTransfer && currentUser.role !== 'super_admin') {
+                                    onNotify(
+                                      'This order was transferred to another telecaller and cannot be edited here.',
+                                      'error'
+                                    );
+                                    return;
+                                  }
+                                  setEditingCell(null);
+                                  setServiceEditOrder(order);
+                                }}
+                                className="py-2 px-2.5 text-slate-800 cursor-pointer hover:text-[#075E54] hover:underline"
+                                title="Click to edit Services & Quantities"
                               >
-                                {isEditing('serviceName') ? (
-                                  <div
-                                    className="space-y-1.5 min-w-[180px]"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <div className="flex flex-wrap gap-1">
-                                      {config.services.map((s) => {
-                                        const selectedList = editingValue
-                                          .split('+')
-                                          .map((item) => item.trim())
-                                          .filter(Boolean);
-                                        const isActive = selectedList.some(
-                                          (item) => item.toLowerCase() === s.toLowerCase()
-                                        );
-                                        return (
-                                          <button
-                                            key={s}
-                                            type="button"
-                                            onClick={() => {
-                                              let next = isActive
-                                                ? selectedList.filter(
-                                                    (item) => item.toLowerCase() !== s.toLowerCase()
-                                                  )
-                                                : [...selectedList, s];
-                                              if (next.length === 0) next = [s];
-                                              next.sort(
-                                                (a, b) =>
-                                                  config.services.indexOf(a) -
-                                                  config.services.indexOf(b)
-                                              );
-                                              setEditingValue(next.join(' + '));
-                                            }}
-                                            className={`px-1.5 py-0.5 text-[10px] font-semibold rounded border cursor-pointer ${
-                                              isActive
-                                                ? 'bg-[#075E54] text-white border-[#075E54]'
-                                                : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-slate-50'
-                                            }`}
-                                          >
-                                            {isActive ? '✓ ' : '+ '}
-                                            {s}
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
-                                    <div className="flex items-center gap-1">
-                                      <button
-                                        type="button"
-                                        onClick={() => commitInlineEdit(order, editingValue)}
-                                        className="px-2 py-0.5 text-[10px] font-semibold bg-[#128C7E] text-white rounded cursor-pointer"
-                                      >
-                                        Save
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setEditingCell(null)}
-                                        className="px-1.5 py-0.5 text-[10px] text-slate-500 hover:text-slate-800 cursor-pointer"
-                                      >
-                                        Cancel
-                                      </button>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  order.serviceName
-                                )}
+                                {order.serviceName}
                               </td>
 
                               <td
@@ -958,10 +999,11 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                                           onClick={() =>
                                             onUpdateOrder(order.id, { status: 'completed' })
                                           }
-                                          className="px-2 py-1 text-[11px] font-semibold bg-[#128C7E] hover:bg-[#075E54] text-white rounded inline-flex items-center gap-1 cursor-pointer"
+                                          title="Mark order as done"
+                                          aria-label="Mark order as done"
+                                          className="p-1.5 bg-[#128C7E] hover:bg-[#075E54] text-white rounded inline-flex items-center justify-center cursor-pointer"
                                         >
-                                          <CheckCircle2 className="w-3 h-3" />
-                                          Done
+                                          <CheckCircle2 className="w-3.5 h-3.5" />
                                         </button>
                                       ) : (
                                         <button
@@ -1046,6 +1088,13 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
             setDeleting(false);
           }
         }}
+      />
+      {/* Edit Services & Quantities Modal */}
+      <ServiceEditModal
+        order={serviceEditOrder}
+        services={config.services}
+        onClose={() => setServiceEditOrder(null)}
+        onSave={onUpdateOrder}
       />
     </div>
   );

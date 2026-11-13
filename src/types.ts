@@ -16,6 +16,7 @@ export const SERVICE_OPTIONS = [
   'Water tank',
   'Sofa',
   'Chimney',
+  'Kitchen',
   'Home cleaning',
   'Bathroom',
 ] as const;
@@ -44,6 +45,7 @@ export interface Order {
   id: string;
   name: string;
   number: string;
+  altNumber?: string;
   bookingDate: string; // YYYY-MM-DD or ''
   address: string;
   serviceName: string;
@@ -76,6 +78,7 @@ export type TranslateTarget = 'english' | 'hindi' | 'punjabi' | 'bilingual_hi' |
 export interface NewOrderPayload {
   name?: string;
   number?: string;
+  altNumber?: string;
   bookingDate?: string;
   address?: string;
   serviceName: string;

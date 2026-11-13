@@ -29,6 +29,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { ExcelImportModal } from './ExcelImportModal';
 import { IndianDateInput } from './IndianDateInput';
 import { InvoiceModal } from './InvoiceModal';
+import { ServiceEditModal } from './ServiceEditModal';
 import { TransferOrderModal } from './TransferOrderModal';
 import type {
   BulkImportOrderRow,
@@ -65,6 +66,7 @@ interface OrderSheetProps {
 type EditableField =
   | 'name'
   | 'number'
+  | 'altNumber'
   | 'bookingDate'
   | 'serviceName'
   | 'city'
@@ -111,12 +113,13 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   // New Order entry modal state
   const [newCity, setNewCity] = useState(config.cities[0] || 'Patiala');
   const [newNumber, setNewNumber] = useState('');
+  const [newAltNumber, setNewAltNumber] = useState('');
   const [newName, setNewName] = useState('');
   const [newServices, setNewServices] = useState<string[]>([
     config.services[0] || 'Water tank',
   ]);
   const [newAddress, setNewAddress] = useState('');
-  const [newQty, setNewQty] = useState('');
+  const [serviceQuantities, setServiceQuantities] = useState<Record<string, number>>({});
   const [tankCounts, setTankCounts] = useState<Record<string, number>>({});
   const [newPrice, setNewPrice] = useState('');
   const [newDate, setNewDate] = useState('');
@@ -231,6 +234,9 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   // Auto Bill / Invoice modal target
   const [invoiceOrder, setInvoiceOrder] = useState<Order | null>(null);
 
+  // Edit Services & Quantities modal target
+  const [serviceEditOrder, setServiceEditOrder] = useState<Order | null>(null);
+
   // Pass / Transfer Order modal targets
   const [transferTargetIds, setTransferTargetIds] = useState<string[] | null>(null);
   const transferTargetOrders = useMemo(() => {
@@ -299,7 +305,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
         }
       }
       if (q) {
-        const hay = `${o.name} ${o.number} ${o.serviceName} ${o.city} ${o.address} ${o.cleanerName} ${o.notes ?? ''} ${o.createdByName} ${o.completedByName ?? ''}`.toLowerCase();
+        const hay = `${o.name} ${o.number} ${o.altNumber ?? ''} ${o.serviceName} ${o.city} ${o.address} ${o.cleanerName} ${o.notes ?? ''} ${o.createdByName} ${o.completedByName ?? ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -442,11 +448,68 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
     });
   };
 
+  const selectedNonTankServices = useMemo(
+    () => newServices.filter((s) => s.toLowerCase() !== 'water tank'),
+    [newServices]
+  );
+
+  const serviceQtySummary = useMemo(() => {
+    const parts: string[] = [];
+    let totalQty = 0;
+    for (const s of selectedNonTankServices) {
+      const q = serviceQuantities[s] || 0;
+      if (q > 0) {
+        totalQty += q;
+        if (s.toLowerCase() === 'sofa') {
+          parts.push(`Sofa: ${q} ${q === 1 ? 'Seat' : 'Seats'}`);
+        } else {
+          parts.push(`${s}: ${q}`);
+        }
+      }
+    }
+    return { text: parts.join(', '), totalQty };
+  }, [selectedNonTankServices, serviceQuantities]);
+
+  const adjustServiceQty = (service: string, delta: number) => {
+    setServiceQuantities((prev) => {
+      const nextVal = Math.max(0, (prev[service] || 0) + delta);
+      if (nextVal === 0) {
+        const copy = { ...prev };
+        delete copy[service];
+        return copy;
+      }
+      return { ...prev, [service]: nextVal };
+    });
+  };
+
+  const setServiceQtyDirect = (service: string, rawVal: string) => {
+    const digits = rawVal.replace(/\D/g, '');
+    const num = digits ? Math.max(0, Math.min(999, Number(digits))) : 0;
+    setServiceQuantities((prev) => {
+      if (num === 0) {
+        const copy = { ...prev };
+        delete copy[service];
+        return copy;
+      }
+      return { ...prev, [service]: num };
+    });
+  };
+
   const toggleNewService = (service: string) => {
     setNewServices((prev) => {
       const exists = prev.includes(service);
       if (exists) {
         if (prev.length === 1) return prev;
+        if (service.toLowerCase() === 'water tank') {
+          setTankCounts({});
+        } else {
+          setServiceQuantities((qPrev) => {
+            if (!(service in qPrev)) return qPrev;
+            const copy = { ...qPrev };
+            delete copy[service];
+            return copy;
+          });
+        }
         return prev.filter((s) => s !== service);
       }
       const next = [...prev, service];
@@ -460,17 +523,14 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
     setAdding(true);
     try {
       const hasWaterTank = newServices.some((s) => s.toLowerCase() === 'water tank');
-      const parsedManualQty = newQty.trim() ? Number(newQty) : null;
-      const manualQtyVal =
-        parsedManualQty && Number.isFinite(parsedManualQty) && parsedManualQty > 0
-          ? parsedManualQty
-          : 0;
       const tankQtyVal = hasWaterTank ? tankSummary.totalTanks : 0;
-      const combinedQty = tankQtyVal + manualQtyVal;
+      const otherQtyVal = serviceQtySummary.totalQty;
+      const combinedQty = tankQtyVal + otherQtyVal;
       const finalQty = combinedQty > 0 ? combinedQty : null;
 
       const noteParts = [
         hasWaterTank && tankSummary.text ? tankSummary.text : '',
+        serviceQtySummary.text ? serviceQtySummary.text : '',
         newNotes.trim(),
       ].filter(Boolean);
 
@@ -482,6 +542,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       await onAddOrder({
         name: newName.trim(),
         number: newNumber.trim(),
+        altNumber: newAltNumber.trim() || undefined,
         bookingDate: newDate.trim(),
         serviceName: finalServiceName,
         city: newCity,
@@ -494,9 +555,10 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
 
       setNewName('');
       setNewNumber('');
+      setNewAltNumber('');
       setNewServices([config.services[0] || 'Water tank']);
       setNewAddress('');
-      setNewQty('');
+      setServiceQuantities({});
       setTankCounts({});
       setNewPrice('');
       setNewDate('');
@@ -514,8 +576,18 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
 
   const handleQuickAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newNumber.trim()) {
-      onNotify('Customer Phone Number is required.', 'error');
+    const cleanPhone = newNumber.replace(/\D/g, '');
+    if (cleanPhone.length !== 10) {
+      onNotify('Please enter a valid 10-digit Phone Number.', 'error');
+      return;
+    }
+    const cleanAltPhone = newAltNumber.replace(/\D/g, '');
+    if (cleanAltPhone && cleanAltPhone.length !== 10) {
+      onNotify('Alternate Number must be 10 digits (or leave it empty).', 'error');
+      return;
+    }
+    if (cleanAltPhone && cleanAltPhone === cleanPhone) {
+      onNotify('Alternate Number must be different from Phone Number.', 'error');
       return;
     }
     if (dateSelectionMode === 'none' || (dateSelectionMode === 'date' && !newDate.trim())) {
@@ -586,7 +658,32 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       return;
     }
 
-    if (field === 'number' && !raw) return;
+    if (field === 'number') {
+      const cleanPhone = raw.replace(/\D/g, '');
+      if (!cleanPhone) return;
+      if (cleanPhone.length !== 10) {
+        onNotify('Phone Number must be exactly 10 digits.', 'error');
+        return;
+      }
+      if (cleanPhone === order.number) return;
+      await onUpdateOrder(order.id, { number: cleanPhone });
+      return;
+    }
+    if (field === 'altNumber') {
+      const cleanAlt = raw.replace(/\D/g, '');
+      if (!cleanAlt) {
+        if (!order.altNumber) return;
+        await onUpdateOrder(order.id, { altNumber: '' });
+        return;
+      }
+      if (cleanAlt.length !== 10) {
+        onNotify('Alternate Number must be 10 digits (or leave empty to clear).', 'error');
+        return;
+      }
+      if (cleanAlt === order.altNumber) return;
+      await onUpdateOrder(order.id, { altNumber: cleanAlt });
+      return;
+    }
     if ((field === 'serviceName' || field === 'city' || field === 'cleanerName') && !raw) return;
     if (raw === String(order[field] ?? '')) return;
     await onUpdateOrder(order.id, { [field]: raw });
@@ -657,7 +754,9 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
     const total = getOrderTotal(order);
     const lines = [
       `*Customer:* ${order.name || 'Customer'}`,
-      ...(order.number ? [`Phone: ${order.number}`] : []),
+      ...(order.number
+        ? [`Phone: ${order.number}${order.altNumber ? ` | Alt: ${order.altNumber}` : ''}`]
+        : []),
       ...(order.bookingDate ? [`Booking Date: ${formatIndianDate(order.bookingDate)}`] : []),
       `Service: ${order.serviceName}${order.qty ? ` | Qty: ${order.qty}` : ''}`,
       `City: ${order.city}`,
@@ -695,7 +794,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
     (mode === 'completed' ? 2 : 0);
 
   const hasWaterTankSelected = newServices.some((s) => s.toLowerCase() === 'water tank');
-  const hasOtherServiceSelected = newServices.some((s) => s.toLowerCase() !== 'water tank');
+  const hasOtherServiceSelected = selectedNonTankServices.length > 0;
 
   return (
     <div className="space-y-3 w-full">
@@ -1322,94 +1421,97 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
 
                       {/* Phone Number */}
                       <td
-                        onClick={() => !isEditing('number') && startEdit(order, 'number')}
-                        className="py-2 px-2.5 font-mono-num text-slate-800 cursor-text whitespace-nowrap"
+                        onClick={() =>
+                          !isEditing('number') && !isEditing('altNumber') && startEdit(order, 'number')
+                        }
+                        className="py-2 px-2.5 font-mono-num text-slate-800 cursor-text whitespace-nowrap group"
                         title="Click to edit Phone"
                       >
                         {isEditing('number') ? (
                           <input
                             autoFocus
                             type="text"
+                            inputMode="numeric"
+                            minLength={10}
+                            maxLength={10}
+                            pattern="\d{10}"
+                            title="Minimum 10, maximum 10 digits"
                             value={editingValue}
-                            onChange={(e) => setEditingValue(e.target.value)}
+                            onChange={(e) =>
+                              setEditingValue(e.target.value.replace(/\D/g, '').slice(0, 10))
+                            }
                             onBlur={() => commitEdit(order)}
                             onKeyDown={(e) => handleCellKeyDown(e, order)}
                             className="w-full px-1.5 py-0.5 text-xs font-mono-num border border-[#128C7E] rounded bg-white focus:outline-none"
                           />
+                        ) : isEditing('altNumber') ? (
+                          <div className="space-y-1" onClick={(e) => e.stopPropagation()}>
+                            <div>{order.number}</div>
+                            <input
+                              autoFocus
+                              type="text"
+                              inputMode="numeric"
+                              maxLength={10}
+                              placeholder="Alt 10-digit"
+                              title="10-digit Alternate Number (clear to remove)"
+                              value={editingValue}
+                              onChange={(e) =>
+                                setEditingValue(e.target.value.replace(/\D/g, '').slice(0, 10))
+                              }
+                              onBlur={() => commitEdit(order)}
+                              onKeyDown={(e) => handleCellKeyDown(e, order)}
+                              className="w-full px-1.5 py-0.5 text-[11px] font-mono-num border border-[#128C7E] rounded bg-white focus:outline-none"
+                            />
+                          </div>
                         ) : (
-                          <span>{order.number}</span>
+                          <div>
+                            <span>{order.number}</span>
+                            {order.altNumber ? (
+                              <div
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  startEdit(order, 'altNumber');
+                                }}
+                                title="Click to edit Alternate Number"
+                                className="text-[11px] text-slate-500 hover:text-[#075E54] cursor-pointer"
+                              >
+                                Alt: {order.altNumber}
+                              </div>
+                            ) : (
+                              order.number && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    startEdit(order, 'altNumber');
+                                  }}
+                                  className="hidden group-hover:block text-[10px] font-sans font-semibold text-[#128C7E] hover:underline cursor-pointer"
+                                >
+                                  + Alt No.
+                                </button>
+                              )
+                            )}
+                          </div>
                         )}
                       </td>
 
-                      {/* Service Name Multi-Select Inline Editor */}
+                      {/* Service Name & Quantities Modal Trigger */}
                       <td
-                        onClick={() => !isEditing('serviceName') && startEdit(order, 'serviceName')}
-                        className="py-2 px-2.5 text-slate-800 cursor-pointer"
-                        title="Click to change or combine Services"
+                        onClick={() => {
+                          if (isSentTransfer && currentUser.role !== 'super_admin') {
+                            onNotify(
+                              'This order was transferred to another telecaller and cannot be edited here.',
+                              'error'
+                            );
+                            return;
+                          }
+                          setEditingCell(null);
+                          setServiceEditOrder(order);
+                        }}
+                        className="py-2 px-2.5 text-slate-800 cursor-pointer hover:text-[#075E54] hover:underline"
+                        title="Click to edit Services & Quantities"
                       >
-                        {isEditing('serviceName') ? (
-                          <div
-                            className="space-y-1.5 min-w-[180px]"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <div className="flex flex-wrap gap-1">
-                              {config.services.map((s) => {
-                                const selectedList = editingValue
-                                  .split('+')
-                                  .map((item) => item.trim())
-                                  .filter(Boolean);
-                                const isActive = selectedList.some(
-                                  (item) => item.toLowerCase() === s.toLowerCase()
-                                );
-                                return (
-                                  <button
-                                    key={s}
-                                    type="button"
-                                    onClick={() => {
-                                      let next = isActive
-                                        ? selectedList.filter(
-                                            (item) => item.toLowerCase() !== s.toLowerCase()
-                                          )
-                                        : [...selectedList, s];
-                                      if (next.length === 0) next = [s];
-                                      next.sort(
-                                        (a, b) =>
-                                          config.services.indexOf(a) - config.services.indexOf(b)
-                                      );
-                                      setEditingValue(next.join(' + '));
-                                    }}
-                                    className={`px-1.5 py-0.5 text-[10px] font-semibold rounded border cursor-pointer ${
-                                      isActive
-                                        ? 'bg-[#075E54] text-white border-[#075E54]'
-                                        : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-slate-50'
-                                    }`}
-                                  >
-                                    {isActive ? '✓ ' : '+ '}
-                                    {s}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => commitEdit(order, editingValue)}
-                                className="px-2 py-0.5 text-[10px] font-semibold bg-[#128C7E] text-white rounded cursor-pointer"
-                              >
-                                Save
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setEditingCell(null)}
-                                className="px-1.5 py-0.5 text-[10px] text-slate-500 hover:text-slate-800 cursor-pointer"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <span>{order.serviceName}</span>
-                        )}
+                        <span>{order.serviceName}</span>
                       </td>
 
                       {/* City Dropdown */}
@@ -1817,15 +1919,39 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
               {/* Row 1 (3 Columns): Phone Number | Customer Name | City Name */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Phone Number <span className="text-red-600">*</span>
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-slate-700">
+                      Phone Number <span className="text-red-600">*</span>
+                    </label>
+                    <span
+                      className={`text-[11px] font-mono-num font-semibold ${
+                        newNumber.length === 10
+                          ? 'text-[#075E54]'
+                          : newNumber.length > 0
+                          ? 'text-amber-700'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {newNumber.length}/10
+                    </span>
+                  </div>
                   <input
                     autoFocus
                     type="text"
+                    inputMode="numeric"
+                    minLength={10}
+                    maxLength={10}
+                    pattern="\d{10}"
+                    title="Minimum 10, maximum 10 digits"
                     required
                     value={newNumber}
-                    onChange={(e) => setNewNumber(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                      setNewNumber(val);
+                      if (val.length < 10 && newAltNumber) {
+                        setNewAltNumber('');
+                      }
+                    }}
                     placeholder="10-digit number"
                     className={`w-full px-3 py-1.5 text-sm font-mono-num border rounded-lg focus:bg-white focus:outline-none ${
                       duplicateMatches.some((m) => m.status === 'active')
@@ -1835,6 +1961,41 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                         : 'bg-[#F7F9F8] border-[#DCE4E0] focus:border-[#128C7E]'
                     }`}
                   />
+
+                  {newNumber.length === 10 && (
+                    <div className="mt-2">
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[11px] font-semibold text-slate-600">
+                          Alternate Number (Optional)
+                        </label>
+                        <span
+                          className={`text-[11px] font-mono-num font-semibold ${
+                            newAltNumber.length === 10
+                              ? 'text-[#075E54]'
+                              : newAltNumber.length > 0
+                              ? 'text-amber-700'
+                              : 'text-slate-400'
+                          }`}
+                        >
+                          {newAltNumber.length}/10
+                        </span>
+                      </div>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        minLength={10}
+                        maxLength={10}
+                        pattern="\d{10}"
+                        title="Minimum 10, maximum 10 digits"
+                        value={newAltNumber}
+                        onChange={(e) =>
+                          setNewAltNumber(e.target.value.replace(/\D/g, '').slice(0, 10))
+                        }
+                        placeholder="Alternate 10-digit number"
+                        className="w-full px-3 py-1.5 text-sm font-mono-num bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -2069,25 +2230,73 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                 </div>
               )}
 
-              {/* Row 4: [Quantity if non-tank service selected] | Price (₹) | Assign Cleaner | Inline Indian Booking Date */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-start">
-                {hasOtherServiceSelected && (
-                  <div className="lg:col-span-2">
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      {hasWaterTankSelected ? 'Other Qty' : 'Quantity'}
+              {/* Row 3B (Per-Service Quantity / Sofa Seats when Chimney, Bathroom, Kitchen, Sofa, etc. are selected) */}
+              {hasOtherServiceSelected && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-slate-700">
+                      Service Quantities &amp; Sofa Seats
                     </label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={newQty}
-                      onChange={(e) => setNewQty(e.target.value)}
-                      placeholder="e.g. 1, 2"
-                      className="w-full px-3 py-1.5 text-sm font-mono-num bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                    />
+                    {serviceQtySummary.totalQty > 0 && (
+                      <span className="text-xs text-[#075E54] font-semibold">
+                        Selected: {serviceQtySummary.text}
+                      </span>
+                    )}
                   </div>
-                )}
+                  <div className="bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg p-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                      {selectedNonTankServices.map((s) => {
+                        const qtyVal = serviceQuantities[s] || 0;
+                        const isSofa = s.toLowerCase() === 'sofa';
+                        const unitLabel = isSofa ? `${s} (Seats)` : `${s} (Qty)`;
+                        return (
+                          <div
+                            key={s}
+                            className={`flex items-center justify-between px-2.5 py-1.5 rounded border text-xs ${
+                              qtyVal > 0
+                                ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold'
+                                : 'bg-white border-[#DCE4E0] text-slate-700'
+                            }`}
+                          >
+                            <span className="truncate mr-2">{unitLabel}</span>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => adjustServiceQty(s, -1)}
+                                className="w-5 h-5 rounded bg-[#EFF4F1] hover:bg-[#DCE4E0] text-slate-700 font-bold flex items-center justify-center cursor-pointer"
+                                title={`Decrease ${unitLabel}`}
+                              >
+                                -
+                              </button>
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                value={qtyVal > 0 ? String(qtyVal) : ''}
+                                onChange={(e) => setServiceQtyDirect(s, e.target.value)}
+                                placeholder={isSofa ? 'Seats' : 'Qty'}
+                                aria-label={unitLabel}
+                                className="w-11 text-center font-mono-num text-xs py-0.5 border border-[#DCE4E0] rounded bg-[#F7F9F8] focus:bg-white focus:outline-none focus:border-[#128C7E]"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => adjustServiceQty(s, 1)}
+                                className="w-5 h-5 rounded bg-[#128C7E] hover:bg-[#075E54] text-white font-bold flex items-center justify-center cursor-pointer"
+                                title={`Increase ${unitLabel}`}
+                              >
+                                +
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
 
-                <div className={hasOtherServiceSelected ? 'lg:col-span-2' : 'lg:col-span-3'}>
+              {/* Row 4: Price (₹) | Assign Cleaner | Inline Indian Booking Date */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-start">
+                <div className="lg:col-span-3">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Price (₹)
                   </label>
@@ -2118,7 +2327,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                   </select>
                 </div>
 
-                <div className={hasOtherServiceSelected ? 'lg:col-span-5' : 'lg:col-span-6'}>
+                <div className="lg:col-span-6">
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-xs font-semibold text-slate-700">
                       Booking Date (Req.)
@@ -2314,6 +2523,14 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
           const transferredSet = new Set(ids);
           setSelectedIds((prev) => prev.filter((id) => !transferredSet.has(id)));
         }}
+      />
+
+      {/* Edit Services & Quantities Modal */}
+      <ServiceEditModal
+        order={serviceEditOrder}
+        services={config.services}
+        onClose={() => setServiceEditOrder(null)}
+        onSave={onUpdateOrder}
       />
     </div>
   );

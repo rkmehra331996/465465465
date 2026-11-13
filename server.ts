@@ -39,6 +39,7 @@ interface StoredOrder {
   id: string;
   name: string;
   number: string;
+  altNumber?: string;
   bookingDate: string;
   address: string;
   serviceName: string;
@@ -100,6 +101,7 @@ const DEFAULT_SERVICES = [
   'Water tank',
   'Sofa',
   'Chimney',
+  'Kitchen',
   'Home cleaning',
   'Bathroom',
 ];
@@ -1043,7 +1045,11 @@ app.get('/api/orders/check-duplicate', requireAuth, (req: AuthedRequest, res) =>
   const matches = db.orders
     .filter((o) => {
       const orderDigits = normalizePhoneDigits(o.number);
-      return orderDigits.length >= 8 && orderDigits === targetDigits;
+      const altDigits = o.altNumber ? normalizePhoneDigits(o.altNumber) : '';
+      return (
+        (orderDigits.length >= 8 && orderDigits === targetDigits) ||
+        (altDigits.length >= 8 && altDigits === targetDigits)
+      );
     })
     .sort((a, b) => {
       if (a.status !== b.status) return a.status === 'active' ? -1 : 1;
@@ -1120,9 +1126,19 @@ app.post('/api/orders', requireAuth, (req: AuthedRequest, res) => {
       ? comm30
       : 0;
 
-  if (!number && !isExtraWork) {
+  const altNumberRaw = String(req.body?.altNumber ?? '').trim();
+  const cleanAltDigits = altNumberRaw.replace(/\D/g, '');
+  if (altNumberRaw && cleanAltDigits.length !== 10) {
     res.status(400).json({
-      error: 'Phone Number is required',
+      error: 'Alternate Number must be exactly 10 digits',
+    });
+    return;
+  }
+
+  const cleanNumberDigits = number.replace(/\D/g, '');
+  if (!isExtraWork && cleanNumberDigits.length !== 10) {
+    res.status(400).json({
+      error: 'Phone Number must be exactly 10 digits',
     });
     return;
   }
@@ -1131,7 +1147,8 @@ app.post('/api/orders', requireAuth, (req: AuthedRequest, res) => {
   const newOrder: StoredOrder = {
     id: `ord-${crypto.randomUUID().slice(0, 8)}`,
     name,
-    number,
+    number: isExtraWork ? number : cleanNumberDigits,
+    altNumber: !isExtraWork && cleanAltDigits ? cleanAltDigits : undefined,
     bookingDate,
     address,
     serviceName: serviceName || DEFAULT_SERVICES[0],
@@ -1226,13 +1243,40 @@ app.patch('/api/orders/:id', requireAuth, (req: AuthedRequest, res) => {
     nextPaymentStatus = 'pending';
   }
 
+  let nextNumber = existing.number;
+  if (typeof req.body?.number === 'string') {
+    const cleanPatchDigits = req.body.number.replace(/\D/g, '');
+    if (existing.isExtraWork) {
+      nextNumber = cleanPatchDigits ? cleanPatchDigits.slice(0, 10) : '';
+    } else {
+      if (cleanPatchDigits.length !== 10) {
+        res.status(400).json({ error: 'Phone Number must be exactly 10 digits (min 10, max 10)' });
+        return;
+      }
+      nextNumber = cleanPatchDigits;
+    }
+  }
+
+  let nextAltNumber = existing.altNumber;
+  if (req.body?.altNumber !== undefined) {
+    const rawAlt = String(req.body.altNumber ?? '').trim();
+    if (!rawAlt) {
+      nextAltNumber = undefined;
+    } else {
+      const cleanAltDigits = rawAlt.replace(/\D/g, '');
+      if (cleanAltDigits.length !== 10) {
+        res.status(400).json({ error: 'Alternate Number must be exactly 10 digits (min 10, max 10)' });
+        return;
+      }
+      nextAltNumber = cleanAltDigits;
+    }
+  }
+
   const updated: StoredOrder = {
     ...existing,
     name: typeof req.body?.name === 'string' ? req.body.name.trim() : existing.name,
-    number:
-      typeof req.body?.number === 'string'
-        ? req.body.number.trim() || (existing.isExtraWork ? '' : existing.number)
-        : existing.number,
+    number: nextNumber,
+    altNumber: nextAltNumber,
     bookingDate:
       typeof req.body?.bookingDate === 'string'
         ? req.body.bookingDate.trim()

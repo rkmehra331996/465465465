@@ -473,7 +473,7 @@ export function buildCleanerWhatsAppMessage(
 
     if (compact) {
       lines.push(
-        `${serialEmoji} *${customerLabel}*${order.number ? ` (${order.number})` : ''}`,
+        `${serialEmoji} *${customerLabel}*${order.number ? ` (${order.number}${order.altNumber ? ` / ${order.altNumber}` : ''})` : ''}`,
         `${order.serviceName} | ${datePart}₹${orderTotal}${extraPart}${qtyPart}`,
         `${addrPart ? `Address: ${addrPart}` : `City: ${order.city}`}${order.notes ? ` | Note: ${order.notes}` : ''}`,
         ''
@@ -481,7 +481,9 @@ export function buildCleanerWhatsAppMessage(
     } else {
       lines.push(
         `${serialEmoji} *Customer:* ${customerLabel}`,
-        ...(order.number ? [`Phone: ${order.number}`] : []),
+        ...(order.number
+          ? [`Phone: ${order.number}${order.altNumber ? ` | Alt: ${order.altNumber}` : ''}`]
+          : []),
         `Service: ${order.serviceName} | City: ${order.city}`,
         ...(indianDate ? [`Booking Date: ${indianDate}`] : []),
         ...(order.address ? [`Address: ${order.address}`] : []),
@@ -501,6 +503,7 @@ export function exportOrdersToCsv(orders: Order[], filename: string): void {
     'Serial No.',
     'Name',
     'Number',
+    'Alt Number',
     'Date of Booking',
     'Service Name',
     'City',
@@ -528,6 +531,7 @@ export function exportOrdersToCsv(orders: Order[], filename: string): void {
     idx + 1,
     o.name || '',
     o.number || '',
+    o.altNumber || '',
     o.bookingDate || '',
     o.serviceName,
     o.city,

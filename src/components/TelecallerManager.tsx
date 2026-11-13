@@ -238,11 +238,16 @@ export const TelecallerManager: React.FC<TelecallerManagerProps> = ({
   const handleAddCleaner = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCleaner.trim()) return;
+    const cleanPhone = newCleanerPhone.replace(/\D/g, '');
+    if (cleanPhone && cleanPhone.length !== 10) {
+      onNotify('Phone number must be exactly 10 digits.', 'error');
+      return;
+    }
     setCleanerSubmitting(true);
     try {
       const res = await addCleaner(
         newCleaner.trim(),
-        newCleanerPhone.trim(),
+        cleanPhone,
         newCleanerCity.trim()
       );
       onConfigChange({
@@ -261,9 +266,14 @@ export const TelecallerManager: React.FC<TelecallerManagerProps> = ({
   };
 
   const handleSaveCleanerProfile = async (cleanerName: string) => {
+    const cleanPhone = editCleanerPhone.replace(/\D/g, '');
+    if (cleanPhone && cleanPhone.length !== 10) {
+      onNotify('Phone number must be exactly 10 digits.', 'error');
+      return;
+    }
     try {
       const cleanerProfiles = await updateCleanerProfile(cleanerName, {
-        phone: editCleanerPhone.trim(),
+        phone: cleanPhone,
         city: editCleanerCity.trim(),
       });
       onConfigChange({ ...config, cleanerProfiles });
@@ -709,9 +719,14 @@ export const TelecallerManager: React.FC<TelecallerManagerProps> = ({
               />
               <input
                 type="text"
+                inputMode="numeric"
+                minLength={10}
+                maxLength={10}
+                pattern="\d{10}"
+                title="Minimum 10, maximum 10 digits"
                 value={newCleanerPhone}
-                onChange={(e) => setNewCleanerPhone(e.target.value)}
-                placeholder="Phone number"
+                onChange={(e) => setNewCleanerPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                placeholder="10-digit phone"
                 className="sm:col-span-3 px-3 py-2 text-sm font-mono-num bg-white border border-[#DCE4E0] rounded-lg focus:outline-none focus:border-[#128C7E]"
               />
               <select
@@ -749,9 +764,16 @@ export const TelecallerManager: React.FC<TelecallerManagerProps> = ({
                         <span className="font-semibold text-slate-900 mr-1">{cleaner}</span>
                         <input
                           type="text"
+                          inputMode="numeric"
+                          minLength={10}
+                          maxLength={10}
+                          pattern="\d{10}"
+                          title="Minimum 10, maximum 10 digits"
                           value={editCleanerPhone}
-                          onChange={(e) => setEditCleanerPhone(e.target.value)}
-                          placeholder="Phone number"
+                          onChange={(e) =>
+                            setEditCleanerPhone(e.target.value.replace(/\D/g, '').slice(0, 10))
+                          }
+                          placeholder="10-digit phone"
                           className="px-2 py-1 text-xs font-mono-num border border-[#128C7E] rounded bg-white w-32"
                         />
                         <select
