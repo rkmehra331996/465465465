@@ -119,7 +119,8 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   const [newQty, setNewQty] = useState('');
   const [tankCounts, setTankCounts] = useState<Record<string, number>>({});
   const [newPrice, setNewPrice] = useState('');
-  const [newDate, setNewDate] = useState(() => todayStr(1));
+  const [newDate, setNewDate] = useState('');
+  const [dateSelectionMode, setDateSelectionMode] = useState<'none' | 'date' | 'not_confirm'>('none');
   const [customDateOpen, setCustomDateOpen] = useState(false);
   const [newCleaner, setNewCleaner] = useState(config.cleaners[0] || 'Jagdish');
   const [newNotes, setNewNotes] = useState('');
@@ -498,7 +499,8 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       setNewQty('');
       setTankCounts({});
       setNewPrice('');
-      setNewDate(todayStr(1));
+      setNewDate('');
+      setDateSelectionMode('none');
       setCustomDateOpen(false);
       setNewNotes('');
       setDuplicateMatches([]);
@@ -514,6 +516,10 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
     e.preventDefault();
     if (!newNumber.trim()) {
       onNotify('Customer Phone Number is required.', 'error');
+      return;
+    }
+    if (dateSelectionMode === 'none' || (dateSelectionMode === 'date' && !newDate.trim())) {
+      onNotify('Please select a Booking Date or choose Not Confirm.', 'error');
       return;
     }
 
@@ -1615,31 +1621,31 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                         </td>
                       )}
 
-                      {/* Actions: Copy, Invoice PDF, Transfer, Confirm, Delete */}
+                      {/* Actions: Copy, Invoice PDF, Transfer, Delete */}
                       <td className="py-2 px-2.5 text-right whitespace-nowrap">
                         <div className="inline-flex items-center justify-end gap-1">
                           <button
                             type="button"
                             onClick={() => handleCopyOrder(order)}
-                            title="Copy order details"
-                            className="px-2 py-1 text-[11px] font-medium bg-white hover:bg-slate-50 text-slate-700 border border-[#DCE4E0] rounded inline-flex items-center gap-1 cursor-pointer"
+                            title={copiedOrderId === order.id ? 'Copied' : 'Copy order details'}
+                            aria-label="Copy order details"
+                            className="p-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-[#DCE4E0] rounded inline-flex items-center justify-center cursor-pointer"
                           >
                             {copiedOrderId === order.id ? (
-                              <Check className="w-3 h-3 text-[#128C7E]" />
+                              <Check className="w-3.5 h-3.5 text-[#128C7E]" />
                             ) : (
-                              <Copy className="w-3 h-3 text-slate-500" />
+                              <Copy className="w-3.5 h-3.5 text-slate-500" />
                             )}
-                            {copiedOrderId === order.id ? 'Copied' : 'Copy'}
                           </button>
 
                           <button
                             type="button"
                             onClick={() => setInvoiceOrder(order)}
                             title="Generate Invoice PDF (City Clean Company)"
-                            className="px-2 py-1 text-[11px] font-semibold bg-white hover:bg-slate-50 text-[#075E54] border border-[#DCE4E0] rounded inline-flex items-center gap-1 cursor-pointer"
+                            aria-label="Generate Invoice PDF"
+                            className="p-1.5 bg-white hover:bg-slate-50 text-[#075E54] border border-[#DCE4E0] rounded inline-flex items-center justify-center cursor-pointer"
                           >
-                            <FileText className="w-3 h-3 text-[#075E54]" />
-                            Invoice PDF
+                            <FileText className="w-3.5 h-3.5 text-[#075E54]" />
                           </button>
 
                           {!(isSentTransfer && currentUser.role !== 'super_admin') ? (
@@ -1648,25 +1654,13 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                                 type="button"
                                 onClick={() => setTransferTargetIds([order.id])}
                                 title="Transfer this order to another telecaller dashboard"
-                                className="px-2 py-1 text-[11px] font-semibold bg-white hover:bg-[#E9F7F0] text-[#075E54] border border-[#DCE4E0] rounded inline-flex items-center gap-1 cursor-pointer"
+                                aria-label="Transfer order"
+                                className="p-1.5 bg-white hover:bg-[#E9F7F0] text-[#075E54] border border-[#DCE4E0] rounded inline-flex items-center justify-center cursor-pointer"
                               >
-                                <ArrowRightLeft className="w-3 h-3 text-[#075E54]" />
-                                Transfer
+                                <ArrowRightLeft className="w-3.5 h-3.5 text-[#075E54]" />
                               </button>
 
-                              {mode === 'active' ? (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    onUpdateOrder(order.id, { status: 'completed' })
-                                  }
-                                  title="Confirm / complete order"
-                                  className="px-2 py-1 text-[11px] font-semibold bg-[#128C7E] hover:bg-[#075E54] text-white rounded inline-flex items-center gap-1 cursor-pointer"
-                                >
-                                  <CheckCircle2 className="w-3 h-3" />
-                                  Confirm
-                                </button>
-                              ) : (
+                              {mode !== 'active' && (
                                 <button
                                   type="button"
                                   onClick={() => onUpdateOrder(order.id, { status: 'active' })}
@@ -1682,10 +1676,10 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                                 type="button"
                                 onClick={() => setDeleteTargetOrder(order)}
                                 title="Delete order"
-                                className="px-2 py-1 text-[11px] font-semibold bg-white border border-red-200 hover:bg-red-50 text-red-600 rounded inline-flex items-center gap-1 cursor-pointer"
+                                aria-label="Delete order"
+                                className="p-1.5 bg-white border border-red-200 hover:bg-red-50 text-red-600 rounded inline-flex items-center justify-center cursor-pointer"
                               >
-                                <Trash2 className="w-3 h-3" />
-                                Delete
+                                <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </>
                           ) : (
@@ -2131,10 +2125,18 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                     </label>
                     <span
                       className={`text-xs font-mono-num font-semibold ${
-                        newDate ? 'text-[#075E54]' : 'text-amber-700'
+                        dateSelectionMode === 'date' && newDate
+                          ? 'text-[#075E54]'
+                          : dateSelectionMode === 'not_confirm'
+                          ? 'text-amber-700'
+                          : 'text-slate-400'
                       }`}
                     >
-                      {newDate ? formatIndianDate(newDate) : 'Not Confirm'}
+                      {dateSelectionMode === 'date' && newDate
+                        ? formatIndianDate(newDate)
+                        : dateSelectionMode === 'not_confirm'
+                        ? 'Not Confirm'
+                        : 'Select Date'}
                     </span>
                   </div>
 
@@ -2144,13 +2146,15 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                       { label: 'Kal', date: todayStr(1) },
                       { label: 'Parso', date: todayStr(2) },
                     ].map((opt) => {
-                      const active = !customDateOpen && newDate === opt.date;
+                      const active =
+                        dateSelectionMode === 'date' && !customDateOpen && newDate === opt.date;
                       return (
                         <button
                           key={opt.label}
                           type="button"
                           onClick={() => {
                             setNewDate(opt.date);
+                            setDateSelectionMode('date');
                             setCustomDateOpen(false);
                           }}
                           className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg border cursor-pointer transition-colors whitespace-nowrap ${
@@ -2167,11 +2171,11 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        if (!newDate) setNewDate(todayStr(1));
                         setCustomDateOpen((prev) => !prev);
                       }}
                       className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg border cursor-pointer transition-colors whitespace-nowrap ${
-                        customDateOpen || (Boolean(newDate) && !getIndianDayTag(newDate))
+                        customDateOpen ||
+                        (dateSelectionMode === 'date' && Boolean(newDate) && !getIndianDayTag(newDate))
                           ? 'bg-[#075E54] text-white border-[#075E54]'
                           : 'bg-[#F7F9F8] text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
                       }`}
@@ -2183,10 +2187,11 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                       type="button"
                       onClick={() => {
                         setNewDate('');
+                        setDateSelectionMode('not_confirm');
                         setCustomDateOpen(false);
                       }}
                       className={`shrink-0 py-1.5 px-2.5 text-xs font-semibold rounded-lg border cursor-pointer transition-colors whitespace-nowrap ${
-                        !customDateOpen && !newDate
+                        !customDateOpen && dateSelectionMode === 'not_confirm'
                           ? 'bg-amber-600 text-white border-amber-600'
                           : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
                       }`}
@@ -2195,14 +2200,18 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                     </button>
                   </div>
 
-                  {(customDateOpen || (Boolean(newDate) && !getIndianDayTag(newDate))) && (
+                  {(customDateOpen ||
+                    (dateSelectionMode === 'date' && Boolean(newDate) && !getIndianDayTag(newDate))) && (
                     <div className="mt-1.5 flex items-center gap-2">
                       <IndianDateInput
                         ariaLabel="Select custom booking date"
                         title="Custom Date (DD/MM/YY)"
                         value={newDate}
                         onChange={(val) => {
-                          if (val) setNewDate(val);
+                          if (val) {
+                            setNewDate(val);
+                            setDateSelectionMode('date');
+                          }
                         }}
                         className="flex-1 rounded-lg border-[#128C7E]"
                       />

@@ -919,25 +919,25 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                                         'Order WhatsApp ke liye copy ho gaya!'
                                       )
                                     }
-                                    title="Copy order for WhatsApp"
-                                    className="px-2 py-1 text-[11px] font-medium bg-white border border-[#DCE4E0] hover:bg-slate-50 text-slate-700 rounded inline-flex items-center gap-1 cursor-pointer"
+                                    title={isRowCopied ? 'Copied' : 'Copy order for WhatsApp'}
+                                    aria-label="Copy order for WhatsApp"
+                                    className="p-1.5 bg-white border border-[#DCE4E0] hover:bg-slate-50 text-slate-700 rounded inline-flex items-center justify-center cursor-pointer"
                                   >
                                     {isRowCopied ? (
-                                      <Check className="w-3 h-3 text-[#128C7E]" />
+                                      <Check className="w-3.5 h-3.5 text-[#128C7E]" />
                                     ) : (
-                                      <Copy className="w-3 h-3 text-slate-500" />
+                                      <Copy className="w-3.5 h-3.5 text-slate-500" />
                                     )}
-                                    {isRowCopied ? 'Copied' : 'Copy'}
                                   </button>
 
                                   <button
                                     type="button"
                                     onClick={() => setInvoiceOrder(order)}
                                     title="Generate Invoice / Bill"
-                                    className="px-2 py-1 text-[11px] font-semibold bg-white border border-[#DCE4E0] hover:bg-slate-50 text-[#075E54] rounded inline-flex items-center gap-1 cursor-pointer"
+                                    aria-label="Generate Invoice / Bill"
+                                    className="p-1.5 bg-white border border-[#DCE4E0] hover:bg-slate-50 text-[#075E54] rounded inline-flex items-center justify-center cursor-pointer"
                                   >
-                                    <FileText className="w-3 h-3 text-[#075E54]" />
-                                    Bill
+                                    <FileText className="w-3.5 h-3.5 text-[#075E54]" />
                                   </button>
 
                                   {!(isSentTransfer && currentUser.role !== 'super_admin') ? (
@@ -946,10 +946,10 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                                         type="button"
                                         onClick={() => setTransferTargetIds([order.id])}
                                         title="Transfer order to another telecaller"
-                                        className="px-2 py-1 text-[11px] font-semibold bg-white border border-[#DCE4E0] hover:bg-[#E9F7F0] text-[#075E54] rounded inline-flex items-center gap-1 cursor-pointer"
+                                        aria-label="Transfer order to another telecaller"
+                                        className="p-1.5 bg-white border border-[#DCE4E0] hover:bg-[#E9F7F0] text-[#075E54] rounded inline-flex items-center justify-center cursor-pointer"
                                       >
-                                        <ArrowRightLeft className="w-3 h-3 text-[#075E54]" />
-                                        Transfer
+                                        <ArrowRightLeft className="w-3.5 h-3.5 text-[#075E54]" />
                                       </button>
 
                                       {order.status === 'active' ? (
@@ -969,9 +969,11 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                                           onClick={() =>
                                             onUpdateOrder(order.id, { status: 'active' })
                                           }
-                                          className="px-2 py-1 text-[11px] font-medium bg-white border border-[#DCE4E0] hover:bg-slate-50 text-slate-700 rounded cursor-pointer"
+                                          title="Reopen order"
+                                          aria-label="Reopen order"
+                                          className="p-1.5 bg-white border border-[#DCE4E0] hover:bg-slate-50 text-slate-700 rounded inline-flex items-center justify-center cursor-pointer"
                                         >
-                                          Reopen
+                                          <RotateCcw className="w-3.5 h-3.5" />
                                         </button>
                                       )}
 
@@ -979,10 +981,10 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
                                         type="button"
                                         onClick={() => setDeleteTargetOrder(order)}
                                         title="Delete order"
-                                        className="px-2 py-1 text-[11px] font-semibold bg-white border border-red-200 hover:bg-red-50 text-red-600 rounded inline-flex items-center gap-1 cursor-pointer"
+                                        aria-label="Delete order"
+                                        className="p-1.5 bg-white border border-red-200 hover:bg-red-50 text-red-600 rounded inline-flex items-center justify-center cursor-pointer"
                                       >
-                                        <Trash2 className="w-3 h-3" />
-                                        Delete
+                                        <Trash2 className="w-3.5 h-3.5" />
                                       </button>
                                     </>
                                   ) : (
