@@ -18,12 +18,10 @@ export const PercentageCalculator: React.FC<PercentageCalculatorProps> = ({ open
     const pct = Number(percent) || 0;
     const pctAmount = (base * pct) / 100;
     const afterLess = base - pctAmount;
-    const afterAdd = base + pctAmount;
 
     return {
       pctAmount,
       afterLess,
-      afterAdd,
     };
   }, [amount, percent]);
 
@@ -176,33 +174,6 @@ export const PercentageCalculator: React.FC<PercentageCalculatorProps> = ({ open
             </button>
           </div>
 
-          <div className="p-3.5 flex items-center justify-between">
-            <div>
-              <div className="text-xs text-slate-500">
-                After +{percent || 0}% (Total)
-              </div>
-              <div className="text-base font-bold font-mono-num text-slate-900">
-                ₹{formatNum(calc.afterAdd)}
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => handleCopy(formatNum(calc.afterAdd), 'add')}
-              className="px-2.5 py-1.5 text-xs font-medium bg-white border border-[#DCE4E0] rounded-md text-slate-700 hover:bg-slate-50 flex items-center gap-1 cursor-pointer"
-            >
-              {copiedKey === 'add' ? (
-                <>
-                  <Check className="w-3.5 h-3.5 text-[#128C7E]" />
-                  Copied
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3.5 h-3.5" />
-                  Copy
-                </>
-              )}
-            </button>
-          </div>
         </div>
 
         <button

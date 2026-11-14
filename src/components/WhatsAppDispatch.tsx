@@ -16,7 +16,6 @@ import {
   toOrderNumberEmoji,
   translateMessage,
 } from '../lib/api';
-import { IndianDateInput } from './IndianDateInput';
 import type { Order, TranslateTarget } from '../types';
 
 function localTodayStr(offsetDays = 0): string {
@@ -65,9 +64,22 @@ export const WhatsAppDispatch: React.FC<WhatsAppDispatchProps> = ({
     [orders]
   );
 
+  const today = localTodayStr(0);
+  const yesterday = localTodayStr(-1);
+  const tomorrow = localTodayStr(1);
+
+  const [dateFilter, setDateFilter] = useState<string>(() =>
+    initialSelectedIds && initialSelectedIds.length > 0 ? '' : localTodayStr(0)
+  );
+
+  const dateFilteredOrders = useMemo(() => {
+    if (!dateFilter) return activeOrders;
+    return activeOrders.filter((o) => o.bookingDate === dateFilter);
+  }, [activeOrders, dateFilter]);
+
   const cleanerSummaries = useMemo(() => {
     const map = new Map<string, { name: string; count: number; totalAmount: number }>();
-    for (const o of activeOrders) {
+    for (const o of dateFilteredOrders) {
       const key = o.cleanerName.trim().toLowerCase();
       if (!key) continue;
       const existing = map.get(key);
@@ -83,17 +95,11 @@ export const WhatsAppDispatch: React.FC<WhatsAppDispatchProps> = ({
       }
     }
     return Array.from(map.values()).sort((a, b) => b.count - a.count);
-  }, [activeOrders]);
-
-  const today = localTodayStr(0);
-  const yesterday = localTodayStr(-1);
-  const tomorrow = localTodayStr(1);
+  }, [dateFilteredOrders]);
 
   const [selectedCleaner, setSelectedCleaner] = useState<string>(
-    initialCleaner || cleanerSummaries[0]?.name || 'all'
+    initialCleaner || cleanerSummaries[0]?.name || ''
   );
-  const [dateFilter, setDateFilter] = useState<string>('');
-  const [compactMode, setCompactMode] = useState<boolean>(false);
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [targetLang, setTargetLang] = useState<TranslateTarget>('english');
   const [messageText, setMessageText] = useState<string>('');
@@ -102,27 +108,37 @@ export const WhatsAppDispatch: React.FC<WhatsAppDispatchProps> = ({
   const [completing, setCompleting] = useState<boolean>(false);
 
   useEffect(() => {
+    if (initialSelectedIds && initialSelectedIds.length > 0) {
+      setDateFilter('');
+    }
+  }, [initialSelectedIds]);
+
+  useEffect(() => {
     if (initialCleaner) {
       setSelectedCleaner(initialCleaner);
-    } else if (selectedCleaner === 'all' && cleanerSummaries.length > 0 && !initialSelectedIds?.length) {
+    } else if (!selectedCleaner && cleanerSummaries.length > 0 && !initialSelectedIds?.length) {
       setSelectedCleaner(cleanerSummaries[0].name);
     }
-  }, [initialCleaner, cleanerSummaries.length]);
+  }, [initialCleaner, initialSelectedIds]);
+
+  useEffect(() => {
+    if (
+      cleanerSummaries.length > 0 &&
+      (!selectedCleaner ||
+        !cleanerSummaries.some(
+          (c) => c.name.trim().toLowerCase() === selectedCleaner.trim().toLowerCase()
+        ))
+    ) {
+      setSelectedCleaner(cleanerSummaries[0].name);
+    }
+  }, [dateFilter, cleanerSummaries, selectedCleaner]);
 
   const matchingOrders = useMemo(() => {
-    return activeOrders.filter((o) => {
-      if (
-        selectedCleaner !== 'all' &&
-        o.cleanerName.trim().toLowerCase() !== selectedCleaner.trim().toLowerCase()
-      ) {
-        return false;
-      }
-      if (dateFilter && o.bookingDate !== dateFilter) {
-        return false;
-      }
-      return true;
-    });
-  }, [activeOrders, selectedCleaner, dateFilter]);
+    if (!selectedCleaner) return [];
+    return dateFilteredOrders.filter(
+      (o) => o.cleanerName.trim().toLowerCase() === selectedCleaner.trim().toLowerCase()
+    );
+  }, [dateFilteredOrders, selectedCleaner]);
 
   useEffect(() => {
     if (initialSelectedIds && initialSelectedIds.length > 0) {
@@ -141,9 +157,8 @@ export const WhatsAppDispatch: React.FC<WhatsAppDispatchProps> = ({
   );
 
   const baseMessage = useMemo(() => {
-    const label = selectedCleaner === 'all' ? 'All Cleaners' : selectedCleaner;
-    return buildCleanerWhatsAppMessage(label, includedOrders, compactMode);
-  }, [selectedCleaner, includedOrders, compactMode]);
+    return buildCleanerWhatsAppMessage(selectedCleaner || 'Cleaner', includedOrders, false);
+  }, [selectedCleaner, includedOrders]);
 
   useEffect(() => {
     if (targetLang === 'english') {
@@ -221,55 +236,9 @@ export const WhatsAppDispatch: React.FC<WhatsAppDispatchProps> = ({
           <h2 className="font-display text-sm font-bold text-slate-900">
             1. Select Cleaner & Orders
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            All orders for the chosen cleaner are auto-numbered together (1️⃣, 2️⃣, 3️⃣...) in one message.
-          </p>
         </div>
 
         <div className="p-4 space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-2">
-              Active Cleaners
-            </label>
-            {cleanerSummaries.length === 0 ? (
-              <div className="text-xs text-slate-500 p-3 bg-[#F7F9F8] rounded-lg border border-[#DCE4E0]">
-                No active orders found. Add orders in the Active Orders sheet first.
-              </div>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {cleanerSummaries.map((c) => {
-                  const isActive =
-                    selectedCleaner.toLowerCase() === c.name.toLowerCase();
-                  return (
-                    <button
-                      key={c.name}
-                      type="button"
-                      onClick={() => setSelectedCleaner(c.name)}
-                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
-                        isActive
-                          ? 'bg-[#075E54] text-white border-[#075E54]'
-                          : 'bg-[#F7F9F8] text-slate-800 border-[#DCE4E0] hover:bg-[#EFF4F1]'
-                      }`}
-                    >
-                      {c.name} ({c.count})
-                    </button>
-                  );
-                })}
-                <button
-                  type="button"
-                  onClick={() => setSelectedCleaner('all')}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
-                    selectedCleaner === 'all'
-                      ? 'bg-[#075E54] text-white border-[#075E54]'
-                      : 'bg-[#F7F9F8] text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
-                  }`}
-                >
-                  All ({activeOrders.length})
-                </button>
-              </div>
-            )}
-          </div>
-
           <div className="space-y-3">
             <div>
               <div className="flex items-center justify-between gap-2 mb-1.5">
@@ -334,61 +303,42 @@ export const WhatsAppDispatch: React.FC<WhatsAppDispatchProps> = ({
                     </>
                   );
                 })()}
-
-                <button
-                  type="button"
-                  onClick={() => setDateFilter('')}
-                  className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
-                    !dateFilter
-                      ? 'bg-[#128C7E] text-white border-[#128C7E]'
-                      : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#F7F9F8]'
-                  }`}
-                >
-                  All
-                </button>
-
-                <div className="flex-1 min-w-[116px]">
-                  <IndianDateInput
-                    ariaLabel="Filter by booking date"
-                    title="Filter by Date (DD/MM/YY)"
-                    value={dateFilter}
-                    onChange={setDateFilter}
-                    allowClear
-                    className="w-full py-0.5 rounded-lg"
-                  />
-                </div>
               </div>
             </div>
+          </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Message Style
-              </label>
-              <div className="grid grid-cols-2 gap-1 p-1 bg-[#EFF4F1] rounded-lg">
-                <button
-                  type="button"
-                  onClick={() => setCompactMode(true)}
-                  className={`py-1 text-xs font-medium rounded transition-colors cursor-pointer ${
-                    compactMode
-                      ? 'bg-white text-[#075E54] shadow-sm'
-                      : 'text-slate-600'
-                  }`}
-                >
-                  Short
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCompactMode(false)}
-                  className={`py-1 text-xs font-medium rounded transition-colors cursor-pointer ${
-                    !compactMode
-                      ? 'bg-white text-[#075E54] shadow-sm'
-                      : 'text-slate-600'
-                  }`}
-                >
-                  Detailed
-                </button>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-2">
+              Active Cleaners ({dateFilter ? formatIndianDate(dateFilter) : 'All Dates'})
+            </label>
+            {cleanerSummaries.length === 0 ? (
+              <div className="text-xs text-slate-500 p-3 bg-[#F7F9F8] rounded-lg border border-[#DCE4E0]">
+                {dateFilter
+                  ? `No active orders scheduled for ${formatIndianDate(dateFilter)}. Pick another date above.`
+                  : 'No active orders found. Add orders in the Active Orders sheet first.'}
               </div>
-            </div>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {cleanerSummaries.map((c) => {
+                  const isActive =
+                    selectedCleaner.toLowerCase() === c.name.toLowerCase();
+                  return (
+                    <button
+                      key={c.name}
+                      type="button"
+                      onClick={() => setSelectedCleaner(c.name)}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
+                        isActive
+                          ? 'bg-[#075E54] text-white border-[#075E54]'
+                          : 'bg-[#F7F9F8] text-slate-800 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                      }`}
+                    >
+                      {c.name} ({c.count})
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="border border-[#DCE4E0] rounded-lg overflow-hidden">

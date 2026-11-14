@@ -1510,6 +1510,63 @@ app.post('/api/orders/transfer', requireAuth, (req: AuthedRequest, res) => {
   });
 });
 
+app.post('/api/orders/untransfer', requireAuth, (req: AuthedRequest, res) => {
+  const user = req.currentUser!;
+  const ids = Array.isArray(req.body?.ids)
+    ? (req.body.ids as unknown[]).map((v) => String(v)).filter(Boolean)
+    : [];
+
+  if (ids.length === 0) {
+    res.status(400).json({ error: 'No order IDs provided' });
+    return;
+  }
+
+  const idSet = new Set(ids);
+  const now = new Date().toISOString();
+  const updatedOrders: StoredOrder[] = [];
+  let unauthorizedCount = 0;
+
+  const nextOrders = db.orders.map((o) => {
+    if (!idSet.has(o.id)) return o;
+    if (!o.transferredFromId) {
+      return o;
+    }
+    if (user.role !== 'super_admin' && o.transferredFromId !== user.id) {
+      unauthorizedCount += 1;
+      return o;
+    }
+
+    const originalUser = db.users.find((u) => u.id === o.transferredFromId);
+    const nextOrder: StoredOrder = {
+      ...o,
+      createdById: originalUser?.id || o.transferredFromId,
+      createdByName: originalUser?.name || o.transferredFromName || user.name,
+      transferredFromId: undefined,
+      transferredFromName: undefined,
+      transferredAt: undefined,
+      updatedAt: now,
+    };
+    updatedOrders.push(nextOrder);
+    return nextOrder;
+  });
+
+  if (updatedOrders.length === 0) {
+    res.status(unauthorizedCount > 0 ? 403 : 400).json({
+      error:
+        unauthorizedCount > 0
+          ? 'Not authorized to unsend one or more selected orders'
+          : 'No transferred orders found to unsend',
+    });
+    return;
+  }
+
+  saveDb({ ...db, orders: nextOrders });
+  res.json({
+    ok: true,
+    orders: updatedOrders,
+  });
+});
+
 app.delete('/api/orders/:id', requireAuth, (req: AuthedRequest, res) => {
   const user = req.currentUser!;
   const { id } = req.params;

@@ -14,6 +14,7 @@ import {
   getStoredToken,
   logout,
   transferOrders,
+  untransferOrders,
   updateOrder,
 } from './lib/api';
 import { LoginView } from './components/LoginView';
@@ -270,6 +271,23 @@ export default function App() {
     }
   };
 
+  const handleUntransferOrders = async (ids: string[]) => {
+    try {
+      const res = await untransferOrders(ids);
+      const updatedMap = new Map(res.orders.map((o) => [o.id, o]));
+      setOrders((prev) => prev.map((o) => updatedMap.get(o.id) || o));
+      const count = res.orders.length;
+      notify(
+        `${count} order${count > 1 ? 's' : ''} unsend ho ${
+          count > 1 ? 'gaye' : 'gaya'
+        }!`
+      );
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Order unsend failed', 'error');
+      throw err;
+    }
+  };
+
   const stats = useMemo(() => {
     const active = orders.filter((o) => o.status === 'active');
     const completed = orders.filter((o) => o.status === 'completed');
@@ -307,15 +325,15 @@ export default function App() {
 
           <nav
             aria-label="Primary navigation"
-            className="flex items-center gap-5 overflow-x-auto text-sm font-medium"
+            className="flex items-center gap-2 sm:gap-3 overflow-x-auto text-xs sm:text-sm font-semibold"
           >
             <button
               type="button"
               onClick={() => setActiveTab('active')}
-              className={`py-1 whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
+              className={`px-3 py-1.5 rounded-md whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'active'
-                  ? 'border-[#25D366] text-white'
-                  : 'border-transparent text-emerald-100/80 hover:text-white'
+                  ? 'bg-red-600 text-white shadow-sm'
+                  : 'text-emerald-100/85 hover:text-white hover:bg-white/10'
               }`}
             >
               Active Orders
@@ -327,10 +345,10 @@ export default function App() {
                 setActiveTab('todays_vendors');
                 setVendorsResetKey((k) => k + 1);
               }}
-              className={`px-3 py-1 rounded-md text-xs sm:text-sm font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+              className={`px-3 py-1.5 rounded-md whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'todays_vendors'
-                  ? 'bg-red-600 text-white ring-2 ring-white shadow-sm'
-                  : 'bg-red-600/90 hover:bg-red-600 text-white'
+                  ? 'bg-red-600 text-white shadow-sm'
+                  : 'text-emerald-100/85 hover:text-white hover:bg-white/10'
               }`}
             >
               Today&apos;s Active Vendors
@@ -342,10 +360,10 @@ export default function App() {
                 setDispatchSelectedIds(undefined);
                 setActiveTab('whatsapp');
               }}
-              className={`py-1 whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
+              className={`px-3 py-1.5 rounded-md whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'whatsapp'
-                  ? 'border-[#25D366] text-white'
-                  : 'border-transparent text-emerald-100/80 hover:text-white'
+                  ? 'bg-red-600 text-white shadow-sm'
+                  : 'text-emerald-100/85 hover:text-white hover:bg-white/10'
               }`}
             >
               WhatsApp Dispatch
@@ -354,10 +372,10 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveTab('payments')}
-              className={`py-1 whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
+              className={`px-3 py-1.5 rounded-md whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'payments'
-                  ? 'border-[#25D366] text-white'
-                  : 'border-transparent text-emerald-100/80 hover:text-white'
+                  ? 'bg-red-600 text-white shadow-sm'
+                  : 'text-emerald-100/85 hover:text-white hover:bg-white/10'
               }`}
             >
               Vendor Payments
@@ -366,10 +384,10 @@ export default function App() {
             <button
               type="button"
               onClick={() => setCalcOpen((prev) => !prev)}
-              className={`py-1 whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
+              className={`px-3 py-1.5 rounded-md whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 calcOpen
-                  ? 'border-[#25D366] text-white'
-                  : 'border-transparent text-emerald-100/80 hover:text-white'
+                  ? 'bg-red-600 text-white shadow-sm'
+                  : 'text-emerald-100/85 hover:text-white hover:bg-white/10'
               }`}
             >
               Calculator
@@ -379,10 +397,10 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setActiveTab('telecallers')}
-                className={`py-1 whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
+                className={`px-3 py-1.5 rounded-md whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                   activeTab === 'telecallers'
-                    ? 'border-[#25D366] text-white'
-                    : 'border-transparent text-emerald-100/80 hover:text-white'
+                    ? 'bg-red-600 text-white shadow-sm'
+                    : 'text-emerald-100/85 hover:text-white hover:bg-white/10'
                 }`}
               >
                 Admin Panel
@@ -412,20 +430,22 @@ export default function App() {
               {activeTab === 'payments' && 'Vendor Payment Ledger — Pending & Cleared'}
               {activeTab === 'telecallers' && 'Super Admin Settings — Cities, Cleaners & Telecallers'}
             </h1>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 mt-0.5">
-              <span>
-                Signed in as <strong className="text-slate-800">{user.name}</strong> (
-                {user.role === 'super_admin' ? 'Super Admin' : 'Telecaller'})
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono-num">Active: {stats.activeCount}</span>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono-num">Completed: {stats.completedCount}</span>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono-num text-[#075E54] font-semibold">
-                Pending Value: ₹{stats.activeAmount.toLocaleString('en-IN')}
-              </span>
-            </div>
+            {activeTab !== 'active' && (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 mt-0.5">
+                <span>
+                  Signed in as <strong className="text-slate-800">{user.name}</strong> (
+                  {user.role === 'super_admin' ? 'Super Admin' : 'Telecaller'})
+                </span>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono-num">Active: {stats.activeCount}</span>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono-num">Completed: {stats.completedCount}</span>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono-num text-[#075E54] font-semibold">
+                  Pending Value: ₹{stats.activeAmount.toLocaleString('en-IN')}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -458,6 +478,7 @@ export default function App() {
             onBulkComplete={handleBulkComplete}
             onBulkImport={handleBulkImportOrders}
             onTransferOrders={handleTransferOrders}
+            onUntransferOrders={handleUntransferOrders}
             onOpenWhatsAppForCleaner={handleOpenWhatsAppForCleaner}
             onNotify={notify}
           />
@@ -473,6 +494,7 @@ export default function App() {
             onDeleteOrder={handleDeleteOrder}
             onBulkComplete={handleBulkComplete}
             onTransferOrders={handleTransferOrders}
+            onUntransferOrders={handleUntransferOrders}
             onOpenWhatsAppForCleaner={handleOpenWhatsAppForCleaner}
             onNotify={notify}
           />

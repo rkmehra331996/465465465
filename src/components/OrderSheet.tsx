@@ -10,10 +10,12 @@ import {
   Download,
   FileText,
   MessageCircle,
+  Pencil,
   Plus,
   RotateCcw,
   Search,
   Trash2,
+  Undo2,
   Upload,
   X,
 } from 'lucide-react';
@@ -31,10 +33,13 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { ExcelImportModal } from './ExcelImportModal';
 import { IndianDateInput } from './IndianDateInput';
 import { InvoiceModal } from './InvoiceModal';
+import { OrderEditModal } from './OrderEditModal';
 import { ServiceEditModal } from './ServiceEditModal';
 import { TransferOrderModal } from './TransferOrderModal';
 import {
   DRY_CLEAN_ITEMS,
+  HOME_CLEANING_ITEMS,
+  getDefaultServicePrice,
   type BulkImportOrderRow,
   type DuplicateOrderMatch,
   type NewOrderPayload,
@@ -60,6 +65,7 @@ interface OrderSheetProps {
     skipDuplicateNumbers: boolean;
   }) => Promise<void>;
   onTransferOrders: (ids: string[], targetUserId: string) => Promise<void>;
+  onUntransferOrders: (ids: string[]) => Promise<void>;
   onOpenWhatsAppForCleaner: (cleanerName: string, selectedIds?: string[]) => void;
   onNotify: (msg: string, type?: 'success' | 'error') => void;
   newOrderOpen?: boolean;
@@ -98,12 +104,12 @@ function shiftIsoDate(isoDate: string, deltaDays: number): string {
 }
 
 const TANK_TYPES = [
-  { key: '500L', label: '500 Ltr' },
-  { key: '750L', label: '750 Ltr' },
-  { key: '1000L', label: '1000 Ltr' },
-  { key: '1500L', label: '1500 Ltr' },
-  { key: '2000L', label: '2000 Ltr' },
-  { key: 'Cement Tank', label: 'Cement Tank' },
+  { key: '500L', label: '500 Ltr', defaultPrice: 500 },
+  { key: '750L', label: '750 Ltr', defaultPrice: 550 },
+  { key: '1000L', label: '1000 Ltr', defaultPrice: 600 },
+  { key: '1500L', label: '1500 Ltr', defaultPrice: 700 },
+  { key: '2000L', label: '2000 Ltr', defaultPrice: 800 },
+  { key: 'Cement Tank', label: 'Cement Tank', defaultPrice: 0 },
 ] as const;
 
 export const OrderSheet: React.FC<OrderSheetProps> = ({
@@ -118,6 +124,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   onBulkComplete,
   onBulkImport,
   onTransferOrders,
+  onUntransferOrders,
   onOpenWhatsAppForCleaner,
   onNotify,
   newOrderOpen: controlledNewOrderOpen,
@@ -138,6 +145,8 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   const [tankPrices, setTankPrices] = useState<Record<string, number>>({});
   const [dryCleanCounts, setDryCleanCounts] = useState<Record<string, number>>({});
   const [dryCleanPrices, setDryCleanPrices] = useState<Record<string, number>>({});
+  const [homeCleaningCounts, setHomeCleaningCounts] = useState<Record<string, number>>({});
+  const [homeCleaningPrices, setHomeCleaningPrices] = useState<Record<string, number>>({});
   const [newPrice, setNewPrice] = useState('');
   const [newLessPrice, setNewLessPrice] = useState('');
   const [priceManuallyEdited, setPriceManuallyEdited] = useState(false);
@@ -221,6 +230,8 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   // Filters & Show Entries pagination
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [quickDateScope, setQuickDateScope] = useState<'all' | 'not_confirmed'>('all');
+  const [dateSort, setDateSort] = useState<'newest' | 'oldest'>('newest');
   const [searchQuery, setSearchQuery] = useState('');
   const [cleanerFilter, setCleanerFilter] = useState('all');
   const [cityFilter, setCityFilter] = useState('all');
@@ -256,13 +267,31 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   // Edit Services & Quantities modal target
   const [serviceEditOrder, setServiceEditOrder] = useState<Order | null>(null);
 
+  // Full Order Edit modal target
+  const [editTargetOrder, setEditTargetOrder] = useState<Order | null>(null);
+
   // Pass / Transfer Order modal targets
   const [transferTargetIds, setTransferTargetIds] = useState<string[] | null>(null);
+  const [unsendingId, setUnsendingId] = useState<string | null>(null);
   const transferTargetOrders = useMemo(() => {
     if (!transferTargetIds || transferTargetIds.length === 0) return [];
     const idSet = new Set(transferTargetIds);
     return orders.filter((o) => idSet.has(o.id));
   }, [orders, transferTargetIds]);
+
+  const handleQuickUnsend = async (ids: string[], key: string) => {
+    if (unsendingId || ids.length === 0) return;
+    setUnsendingId(key);
+    try {
+      await onUntransferOrders(ids);
+      const idSet = new Set(ids);
+      setSelectedIds((prev) => prev.filter((id) => !idSet.has(id)));
+    } catch {
+      // Notification already handled by parent
+    } finally {
+      setUnsendingId(null);
+    }
+  };
 
   const modeOrders = useMemo(
     () => orders.filter((o) => o.status === mode),
@@ -291,7 +320,12 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
 
   const filteredOrders = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return modeOrders.filter((o) => {
+    const list = modeOrders.filter((o) => {
+      if (mode === 'active' && quickDateScope === 'not_confirmed') {
+        const bd = (o.bookingDate || '').trim();
+        const isNotConfirm = !bd || bd.toLowerCase() === 'not confirm';
+        if (!isNotConfirm) return false;
+      }
       if (fromDate && (!o.bookingDate || o.bookingDate < fromDate)) return false;
       if (toDate && (!o.bookingDate || o.bookingDate > toDate)) return false;
       if (cleanerFilter !== 'all' && o.cleanerName.toLowerCase() !== cleanerFilter.toLowerCase()) {
@@ -329,9 +363,29 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       }
       return true;
     });
+
+    const getValidIsoDate = (o: Order) => {
+      const bd = (o.bookingDate || '').trim();
+      return /^\d{4}-\d{2}-\d{2}$/.test(bd) ? bd : '';
+    };
+
+    return list.sort((a, b) => {
+      const da = getValidIsoDate(a);
+      const db = getValidIsoDate(b);
+      if (da && !db) return -1;
+      if (!da && db) return 1;
+      if (da && db && da !== db) {
+        return dateSort === 'newest' ? db.localeCompare(da) : da.localeCompare(db);
+      }
+      return dateSort === 'newest'
+        ? b.createdAt.localeCompare(a.createdAt)
+        : a.createdAt.localeCompare(b.createdAt);
+    });
   }, [
     modeOrders,
     mode,
+    quickDateScope,
+    dateSort,
     fromDate,
     toDate,
     cleanerFilter,
@@ -461,34 +515,53 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   const setTankCountDirect = (key: string, rawVal: string) => {
     const digits = rawVal.replace(/\D/g, '');
     const num = digits ? Math.max(0, Math.min(999, Number(digits))) : 0;
-    setTankCounts((prev) => {
-      if (num === 0) {
+    const prevCount = tankCounts[key] || 0;
+    const tankDef = TANK_TYPES.find((t) => t.key === key);
+
+    if (num === 0) {
+      setTankCounts((prev) => {
+        if (!(key in prev)) return prev;
         const copy = { ...prev };
         delete copy[key];
-        setTankPrices((pPrev) => {
-          if (!(key in pPrev)) return pPrev;
-          const pCopy = { ...pPrev };
-          delete pCopy[key];
-          return pCopy;
-        });
         return copy;
-      }
-      return { ...prev, [key]: num };
-    });
+      });
+      setTankPrices((pPrev) => {
+        if (!(key in pPrev)) return pPrev;
+        const pCopy = { ...pPrev };
+        delete pCopy[key];
+        return pCopy;
+      });
+      return;
+    }
+
+    setTankCounts((prev) => ({ ...prev, [key]: num }));
+    if (prevCount === 0 && tankDef && tankDef.defaultPrice > 0) {
+      setTankPrices((pPrev) =>
+        pPrev[key] === undefined ? { ...pPrev, [key]: tankDef.defaultPrice } : pPrev
+      );
+    }
   };
 
   const setTankPriceDirect = (key: string, rawVal: string) => {
     const digits = rawVal.replace(/\D/g, '');
     const num = digits ? Math.max(0, Math.min(999999, Number(digits))) : 0;
-    setTankPrices((prev) => {
-      if (num === 0) {
+    const count = tankCounts[key] || 0;
+
+    if (num === 0) {
+      setTankPrices((prev) => {
+        if (count > 0) {
+          return { ...prev, [key]: 0 };
+        }
+        if (!(key in prev)) return prev;
         const copy = { ...prev };
         delete copy[key];
         return copy;
-      }
-      return { ...prev, [key]: num };
-    });
-    if (num > 0) {
+      });
+      return;
+    }
+
+    setTankPrices((prev) => ({ ...prev, [key]: num }));
+    if (count === 0) {
       setTankCounts((prev) => ((prev[key] || 0) === 0 ? { ...prev, [key]: 1 } : prev));
     }
   };
@@ -512,43 +585,124 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   const setDryCleanCountDirect = (key: string, rawVal: string) => {
     const digits = rawVal.replace(/\D/g, '');
     const num = digits ? Math.max(0, Math.min(999, Number(digits))) : 0;
-    setDryCleanCounts((prev) => {
-      if (num === 0) {
+    const prevCount = dryCleanCounts[key] || 0;
+    const itemDef = DRY_CLEAN_ITEMS.find((item) => item.key === key);
+
+    if (num === 0) {
+      setDryCleanCounts((prev) => {
+        if (!(key in prev)) return prev;
         const copy = { ...prev };
         delete copy[key];
-        setDryCleanPrices((pPrev) => {
-          if (!(key in pPrev)) return pPrev;
-          const pCopy = { ...pPrev };
-          delete pCopy[key];
-          return pCopy;
-        });
         return copy;
-      }
-      return { ...prev, [key]: num };
-    });
+      });
+      setDryCleanPrices((pPrev) => {
+        if (!(key in pPrev)) return pPrev;
+        const pCopy = { ...pPrev };
+        delete pCopy[key];
+        return pCopy;
+      });
+      return;
+    }
+
+    setDryCleanCounts((prev) => ({ ...prev, [key]: num }));
+    if (prevCount === 0 && itemDef && itemDef.defaultPrice > 0) {
+      setDryCleanPrices((pPrev) =>
+        pPrev[key] === undefined ? { ...pPrev, [key]: itemDef.defaultPrice } : pPrev
+      );
+    }
   };
 
   const setDryCleanPriceDirect = (key: string, rawVal: string) => {
     const digits = rawVal.replace(/\D/g, '');
     const num = digits ? Math.max(0, Math.min(999999, Number(digits))) : 0;
-    setDryCleanPrices((prev) => {
-      if (num === 0) {
+    const count = dryCleanCounts[key] || 0;
+
+    if (num === 0) {
+      setDryCleanPrices((prev) => {
+        if (count > 0) {
+          return { ...prev, [key]: 0 };
+        }
+        if (!(key in prev)) return prev;
         const copy = { ...prev };
         delete copy[key];
         return copy;
-      }
-      return { ...prev, [key]: num };
-    });
-    if (num > 0) {
+      });
+      return;
+    }
+
+    setDryCleanPrices((prev) => ({ ...prev, [key]: num }));
+    if (count === 0) {
       setDryCleanCounts((prev) => ((prev[key] || 0) === 0 ? { ...prev, [key]: 1 } : prev));
+    }
+  };
+
+  const homeCleaningSummary = useMemo(() => {
+    const parts: string[] = [];
+    let totalItems = 0;
+    let totalPrice = 0;
+    for (const item of HOME_CLEANING_ITEMS) {
+      const cnt = homeCleaningCounts[item.key] || 0;
+      const rate = homeCleaningPrices[item.key] || 0;
+      if (cnt > 0) {
+        parts.push(rate > 0 ? `${item.label} × ${cnt} @ ₹${rate}` : `${item.label} × ${cnt}`);
+        totalItems += cnt;
+        if (rate > 0) totalPrice += cnt * rate;
+      }
+    }
+    return { text: parts.join(', '), totalItems, totalPrice };
+  }, [homeCleaningCounts, homeCleaningPrices]);
+
+  const setHomeCleaningCountDirect = (key: string, rawVal: string) => {
+    const digits = rawVal.replace(/\D/g, '');
+    const num = digits ? Math.max(0, Math.min(999, Number(digits))) : 0;
+    if (num === 0) {
+      setHomeCleaningCounts((prev) => {
+        if (!(key in prev)) return prev;
+        const copy = { ...prev };
+        delete copy[key];
+        return copy;
+      });
+      setHomeCleaningPrices((pPrev) => {
+        if (!(key in pPrev)) return pPrev;
+        const pCopy = { ...pPrev };
+        delete pCopy[key];
+        return pCopy;
+      });
+      return;
+    }
+    setHomeCleaningCounts((prev) => ({ ...prev, [key]: num }));
+  };
+
+  const setHomeCleaningPriceDirect = (key: string, rawVal: string) => {
+    const digits = rawVal.replace(/\D/g, '');
+    const num = digits ? Math.max(0, Math.min(999999, Number(digits))) : 0;
+    const count = homeCleaningCounts[key] || 0;
+
+    if (num === 0) {
+      setHomeCleaningPrices((prev) => {
+        if (count > 0) {
+          return { ...prev, [key]: 0 };
+        }
+        if (!(key in prev)) return prev;
+        const copy = { ...prev };
+        delete copy[key];
+        return copy;
+      });
+      return;
+    }
+
+    setHomeCleaningPrices((prev) => ({ ...prev, [key]: num }));
+    if (count === 0) {
+      setHomeCleaningCounts((prev) => ((prev[key] || 0) === 0 ? { ...prev, [key]: 1 } : prev));
     }
   };
 
   const selectedNonTankServices = useMemo(
     () =>
-      newServices.filter(
-        (s) => s.toLowerCase() !== 'water tank' && s.toLowerCase() !== 'dry clean'
-      ),
+      newServices.filter((s) => {
+        const lower = s.toLowerCase();
+        return lower !== 'water tank' && lower !== 'dry clean' && lower !== 'home cleaning';
+      }),
     [newServices]
   );
 
@@ -576,12 +730,20 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   const autoCalculatedTotal = useMemo(() => {
     const hasWaterTank = newServices.some((s) => s.toLowerCase() === 'water tank');
     const hasDryClean = newServices.some((s) => s.toLowerCase() === 'dry clean');
+    const hasHomeCleaning = newServices.some((s) => s.toLowerCase() === 'home cleaning');
     return (
       (hasWaterTank ? tankSummary.totalPrice : 0) +
       (hasDryClean ? dryCleanSummary.totalPrice : 0) +
+      (hasHomeCleaning ? homeCleaningSummary.totalPrice : 0) +
       serviceQtySummary.totalPrice
     );
-  }, [newServices, tankSummary.totalPrice, dryCleanSummary.totalPrice, serviceQtySummary.totalPrice]);
+  }, [
+    newServices,
+    tankSummary.totalPrice,
+    dryCleanSummary.totalPrice,
+    homeCleaningSummary.totalPrice,
+    serviceQtySummary.totalPrice,
+  ]);
 
   useEffect(() => {
     if (!priceManuallyEdited) {
@@ -592,34 +754,53 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   const setServiceQtyDirect = (service: string, rawVal: string) => {
     const digits = rawVal.replace(/\D/g, '');
     const num = digits ? Math.max(0, Math.min(999, Number(digits))) : 0;
-    setServiceQuantities((prev) => {
-      if (num === 0) {
+    const prevQty = serviceQuantities[service] || 0;
+    const defaultPrice = getDefaultServicePrice(service);
+
+    if (num === 0) {
+      setServiceQuantities((prev) => {
+        if (!(service in prev)) return prev;
         const copy = { ...prev };
         delete copy[service];
-        setServicePrices((pPrev) => {
-          if (!(service in pPrev)) return pPrev;
-          const pCopy = { ...pPrev };
-          delete pCopy[service];
-          return pCopy;
-        });
         return copy;
-      }
-      return { ...prev, [service]: num };
-    });
+      });
+      setServicePrices((pPrev) => {
+        if (!(service in pPrev)) return pPrev;
+        const pCopy = { ...pPrev };
+        delete pCopy[service];
+        return pCopy;
+      });
+      return;
+    }
+
+    setServiceQuantities((prev) => ({ ...prev, [service]: num }));
+    if (prevQty === 0 && defaultPrice > 0) {
+      setServicePrices((pPrev) =>
+        pPrev[service] === undefined ? { ...pPrev, [service]: defaultPrice } : pPrev
+      );
+    }
   };
 
   const setServicePriceDirect = (service: string, rawVal: string) => {
     const digits = rawVal.replace(/\D/g, '');
     const num = digits ? Math.max(0, Math.min(999999, Number(digits))) : 0;
-    setServicePrices((prev) => {
-      if (num === 0) {
+    const qty = serviceQuantities[service] || 0;
+
+    if (num === 0) {
+      setServicePrices((prev) => {
+        if (qty > 0) {
+          return { ...prev, [service]: 0 };
+        }
+        if (!(service in prev)) return prev;
         const copy = { ...prev };
         delete copy[service];
         return copy;
-      }
-      return { ...prev, [service]: num };
-    });
-    if (num > 0) {
+      });
+      return;
+    }
+
+    setServicePrices((prev) => ({ ...prev, [service]: num }));
+    if (qty === 0) {
       setServiceQuantities((prev) => ((prev[service] || 0) === 0 ? { ...prev, [service]: 1 } : prev));
     }
   };
@@ -635,6 +816,9 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
         } else if (service.toLowerCase() === 'dry clean') {
           setDryCleanCounts({});
           setDryCleanPrices({});
+        } else if (service.toLowerCase() === 'home cleaning') {
+          setHomeCleaningCounts({});
+          setHomeCleaningPrices({});
         } else {
           setServiceQuantities((qPrev) => {
             if (!(service in qPrev)) return qPrev;
@@ -663,10 +847,12 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
     try {
       const hasWaterTank = newServices.some((s) => s.toLowerCase() === 'water tank');
       const hasDryClean = newServices.some((s) => s.toLowerCase() === 'dry clean');
+      const hasHomeCleaning = newServices.some((s) => s.toLowerCase() === 'home cleaning');
       const tankQtyVal = hasWaterTank ? tankSummary.totalTanks : 0;
       const dryCleanQtyVal = hasDryClean ? dryCleanSummary.totalItems : 0;
+      const homeCleaningQtyVal = hasHomeCleaning ? homeCleaningSummary.totalItems : 0;
       const otherQtyVal = serviceQtySummary.totalQty;
-      const combinedQty = tankQtyVal + dryCleanQtyVal + otherQtyVal;
+      const combinedQty = tankQtyVal + dryCleanQtyVal + homeCleaningQtyVal + otherQtyVal;
       const finalQty = combinedQty > 0 ? combinedQty : null;
 
       const grossTotal = Math.max(0, Number(newPrice) || 0);
@@ -676,6 +862,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       const noteParts = [
         hasWaterTank && tankSummary.text ? tankSummary.text : '',
         hasDryClean && dryCleanSummary.text ? dryCleanSummary.text : '',
+        hasHomeCleaning && homeCleaningSummary.text ? homeCleaningSummary.text : '',
         serviceQtySummary.text ? serviceQtySummary.text : '',
         lessAmount > 0 ? `Less: ₹${lessAmount}` : '',
         newNotes.trim(),
@@ -711,6 +898,8 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       setTankPrices({});
       setDryCleanCounts({});
       setDryCleanPrices({});
+      setHomeCleaningCounts({});
+      setHomeCleaningPrices({});
       setNewPrice('');
       setNewLessPrice('');
       setPriceManuallyEdited(false);
@@ -948,6 +1137,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
 
   const hasWaterTankSelected = newServices.some((s) => s.toLowerCase() === 'water tank');
   const hasDryCleanSelected = newServices.some((s) => s.toLowerCase() === 'dry clean');
+  const hasHomeCleaningSelected = newServices.some((s) => s.toLowerCase() === 'home cleaning');
   const hasOtherServiceSelected = selectedNonTankServices.length > 0;
 
   return (
@@ -987,7 +1177,9 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
             <option value={-1}>All</option>
           </select>
 
-          {(fromDate ||
+          {(quickDateScope !== 'all' ||
+            dateSort !== 'newest' ||
+            fromDate ||
             toDate ||
             cleanerFilter !== 'all' ||
             cityFilter !== 'all' ||
@@ -999,6 +1191,8 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
             <button
               type="button"
               onClick={() => {
+                setQuickDateScope('all');
+                setDateSort('newest');
                 setFromDate('');
                 setToDate('');
                 setCleanerFilter('all');
@@ -1017,7 +1211,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
           )}
         </div>
 
-        {/* Right: Back Date / Today / Next Date + Date-to-Date, Service, City, Cleaners, Import & Export */}
+        {/* Right: All Data / Not Confirmed / Back Date / Next Date, Service, City, Cleaners, Import & Export */}
         <div className="flex items-center gap-1.5 overflow-x-auto sheet-scroll flex-nowrap min-w-0">
           {mode === 'active' && (() => {
             const today = todayStr(0);
@@ -1027,17 +1221,58 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
             const backDateTarget = isSingleDay ? shiftIsoDate(fromDate, -1) : yesterday;
             const nextDateTarget = isSingleDay ? shiftIsoDate(fromDate, 1) : tomorrow;
             const backDay = backDateTarget.slice(8, 10);
-            const todayDay = today.slice(8, 10);
             const nextDay = nextDateTarget.slice(8, 10);
             const isBackActive = isSingleDay && fromDate < today;
-            const isTodayActive = fromDate === today && toDate === today;
             const isNextActive = isSingleDay && fromDate > today;
+
+            const isAllDataActive = quickDateScope === 'all' && !fromDate && !toDate;
+            const isNotConfirmedActive = quickDateScope === 'not_confirmed' && !fromDate && !toDate;
 
             return (
               <div className="flex items-center gap-1 shrink-0">
                 <button
                   type="button"
                   onClick={() => {
+                    setFromDate('');
+                    setToDate('');
+                    setQuickDateScope('all');
+                    setCurrentPage(1);
+                  }}
+                  title="All active orders (includes both dated and Not Confirmed orders; excludes Completed)"
+                  className={`px-2.5 py-1 text-xs font-semibold rounded border cursor-pointer whitespace-nowrap transition-colors ${
+                    isAllDataActive
+                      ? 'bg-[#075E54] text-white border-[#075E54]'
+                      : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                  }`}
+                >
+                  All Data
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const hadDateRange = Boolean(fromDate || toDate);
+                    setFromDate('');
+                    setToDate('');
+                    setQuickDateScope((prev) =>
+                      hadDateRange || prev !== 'not_confirmed' ? 'not_confirmed' : 'all'
+                    );
+                    setCurrentPage(1);
+                  }}
+                  title="Show active orders with Not Confirm booking date"
+                  className={`px-2.5 py-1 text-xs font-semibold rounded border cursor-pointer whitespace-nowrap transition-colors ${
+                    isNotConfirmedActive
+                      ? 'bg-amber-600 text-white border-amber-700'
+                      : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-amber-50 hover:text-amber-800'
+                  }`}
+                >
+                  Not Confirmed
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickDateScope('all');
                     setFromDate(backDateTarget);
                     setToDate(backDateTarget);
                     setCurrentPage(1);
@@ -1056,23 +1291,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    setFromDate(today);
-                    setToDate(today);
-                    setCurrentPage(1);
-                  }}
-                  title={`Today (${formatIndianDate(today)})`}
-                  className={`px-2.5 py-1 text-xs font-semibold rounded border cursor-pointer whitespace-nowrap transition-colors ${
-                    isTodayActive
-                      ? 'bg-purple-800 text-white border-purple-900 ring-2 ring-purple-300'
-                      : 'bg-purple-600 text-white border-purple-700 hover:bg-purple-700'
-                  }`}
-                >
-                  Today ({todayDay})
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
+                    setQuickDateScope('all');
                     setFromDate(nextDateTarget);
                     setToDate(nextDateTarget);
                     setCurrentPage(1);
@@ -1091,31 +1310,19 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
             );
           })()}
 
-          <div className="flex items-center gap-1 text-xs text-slate-600 shrink-0">
-            <IndianDateInput
-              ariaLabel="From date"
-              title="From Date (DD/MM/YY)"
-              value={fromDate}
-              onChange={(val) => {
-                setFromDate(val);
-                setCurrentPage(1);
-              }}
-              allowClear
-              className="w-[106px]"
-            />
-            <span className="text-slate-400 text-[11px]">to</span>
-            <IndianDateInput
-              ariaLabel="To date"
-              title="To Date (DD/MM/YY)"
-              value={toDate}
-              onChange={(val) => {
-                setToDate(val);
-                setCurrentPage(1);
-              }}
-              allowClear
-              className="w-[106px]"
-            />
-          </div>
+          <select
+            aria-label="Date sorting"
+            title="Date Sorting"
+            value={dateSort}
+            onChange={(e) => {
+              setDateSort(e.target.value as 'newest' | 'oldest');
+              setCurrentPage(1);
+            }}
+            className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400 shrink-0"
+          >
+            <option value="newest">Date: New to Old</option>
+            <option value="oldest">Date: Old to New</option>
+          </select>
 
           <select
             aria-label="Filter by service"
@@ -1249,50 +1456,80 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
           </button>
         </div>
 
-        {selectedIds.length > 0 && (
-          <div className="w-full pt-2 border-t border-[#DCE4E0] flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs font-medium text-slate-700">
-              {selectedIds.length} selected
-            </span>
-            <div className="flex items-center gap-2">
-              {mode === 'active' && (
-                <>
+        {selectedIds.length > 0 && (() => {
+          const selectedSet = new Set(selectedIds);
+          const selectedOrderObjs = orders.filter((o) => selectedSet.has(o.id));
+          const sendableIds = selectedOrderObjs
+            .filter((o) => currentUser.role === 'super_admin' || o.createdById === currentUser.id)
+            .map((o) => o.id);
+          const unsendableIds = selectedOrderObjs
+            .filter(
+              (o) =>
+                Boolean(o.transferredFromId) &&
+                (currentUser.role === 'super_admin' || o.transferredFromId === currentUser.id)
+            )
+            .map((o) => o.id);
+
+          return (
+            <div className="w-full pt-2 border-t border-[#DCE4E0] flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-700">
+                {selectedIds.length} selected
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {mode === 'active' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleSendSelectedToWhatsApp}
+                      className="px-3 py-1 text-xs font-semibold bg-[#25D366] hover:bg-[#1ebe5d] text-white rounded flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    >
+                      <MessageCircle className="w-3.5 h-3.5" />
+                      Send to WhatsApp
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleBulkCompleteClick}
+                      className="px-3 py-1 text-xs font-semibold bg-[#128C7E] hover:bg-[#075E54] text-white rounded flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Confirm Orders
+                    </button>
+                  </>
+                )}
+                {sendableIds.length > 0 && (
                   <button
                     type="button"
-                    onClick={handleSendSelectedToWhatsApp}
-                    className="px-3 py-1 text-xs font-semibold bg-[#25D366] hover:bg-[#1ebe5d] text-white rounded flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    onClick={() => setTransferTargetIds(selectedIds)}
+                    className="px-3 py-1 text-xs font-semibold bg-white hover:bg-slate-50 text-[#075E54] border border-[#128C7E] rounded flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
                   >
-                    <MessageCircle className="w-3.5 h-3.5" />
-                    Send to WhatsApp
+                    <ArrowRightLeft className="w-3.5 h-3.5" />
+                    Send Transfer
                   </button>
+                )}
+                {unsendableIds.length > 0 && (
                   <button
                     type="button"
-                    onClick={handleBulkCompleteClick}
-                    className="px-3 py-1 text-xs font-semibold bg-[#128C7E] hover:bg-[#075E54] text-white rounded flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    disabled={unsendingId === 'bulk'}
+                    onClick={() => handleQuickUnsend(unsendableIds, 'bulk')}
+                    className="px-3 py-1 text-xs font-semibold bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white rounded flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
                   >
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    Confirm Orders
+                    <Undo2 className="w-3.5 h-3.5" />
+                    {unsendingId === 'bulk'
+                      ? 'Unsending...'
+                      : `Unsend Transfer (${unsendableIds.length})`}
                   </button>
-                </>
-              )}
-              <button
-                type="button"
-                onClick={() => setTransferTargetIds(selectedIds)}
-                className="px-3 py-1 text-xs font-semibold bg-white hover:bg-slate-50 text-[#075E54] border border-[#128C7E] rounded flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-              >
-                <ArrowRightLeft className="w-3.5 h-3.5" />
-                Transfer to Telecaller
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedIds([])}
-                className="px-2 py-1 text-xs text-slate-600 hover:text-slate-900 cursor-pointer"
-              >
-                Clear
-              </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds([])}
+                  className="px-2 py-1 text-xs text-slate-600 hover:text-slate-900 cursor-pointer"
+                >
+                  Clear
+                </button>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       {/* Completed Mode: Vendor Payment Breakdown (100% Work vs 30% Commission Leni Hai) */}
@@ -1407,9 +1644,13 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       {/* Clean Table Matching Today's Active Vendors Style */}
       <div className="bg-white border border-[#DCE4E0] rounded-xl overflow-hidden">
         <div className="overflow-x-auto sheet-scroll">
-          <table className="w-full text-left border-collapse min-w-[1080px]">
+          <table
+            className={`w-full text-left border-collapse min-w-[1080px] [&_th]:border-b [&_th]:border-r [&_th]:border-[#DCE4E0] [&_th:last-child]:border-r-0 [&_td]:border-y [&_td]:border-r [&_td]:border-[#DCE4E0] [&_td:last-child]:border-r-0 [&_tbody_tr:first-child_td]:border-t-0 [&_tfoot_tr_td]:border-b-0 ${
+              filteredOrders.length === 0 ? '[&_tbody_tr:last-child_td]:border-b-0' : ''
+            }`}
+          >
             <thead>
-              <tr className="bg-white border-b border-[#DCE4E0] text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              <tr className="bg-[#FAFDFB] border-b border-[#DCE4E0] text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                 <th className="py-2 px-2.5 w-9 text-center">
                   <input
                     type="checkbox"
@@ -1444,7 +1685,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                 <th className="py-2 px-2.5 w-52 text-right">Action</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#DCE4E0] text-xs">
+            <tbody className="text-xs">
               {loading ? (
                 <tr>
                   <td
@@ -1481,7 +1722,10 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                   const isOtherTransfer =
                     !isSentTransfer && !isReceivedTransfer && Boolean(order.transferredFromName);
 
-                  let rowClass = 'hover:bg-[#FAFDFB]';
+                  let rowClass =
+                    idx % 2 === 0
+                      ? 'bg-white hover:bg-gray-50'
+                      : 'bg-gray-100 hover:bg-gray-200/70';
                   if (isChecked) {
                     rowClass = 'bg-[#E9F7F0]';
                   } else if (isSentTransfer) {
@@ -1980,13 +2224,39 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                             <>
                               <button
                                 type="button"
+                                onClick={() => setEditTargetOrder(order)}
+                                title="Edit order"
+                                aria-label="Edit order"
+                                className="p-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-[#DCE4E0] rounded inline-flex items-center justify-center cursor-pointer"
+                              >
+                                <Pencil className="w-3.5 h-3.5 text-slate-600" />
+                              </button>
+
+                              <button
+                                type="button"
                                 onClick={() => setTransferTargetIds([order.id])}
-                                title="Transfer this order to another telecaller dashboard"
+                                title="Send / Transfer this order to another telecaller dashboard"
                                 aria-label="Transfer order"
                                 className="p-1.5 bg-white hover:bg-[#E9F7F0] text-[#075E54] border border-[#DCE4E0] rounded inline-flex items-center justify-center cursor-pointer"
                               >
                                 <ArrowRightLeft className="w-3.5 h-3.5 text-[#075E54]" />
                               </button>
+
+                              {Boolean(order.transferredFromId) &&
+                                (currentUser.role === 'super_admin' ||
+                                  order.transferredFromId === currentUser.id) && (
+                                  <button
+                                    type="button"
+                                    disabled={unsendingId === order.id}
+                                    onClick={() => handleQuickUnsend([order.id], order.id)}
+                                    title={`Unsend transfer back to ${order.transferredFromName || 'original owner'}`}
+                                    aria-label="Unsend transfer"
+                                    className="px-2 py-1 text-[11px] font-semibold bg-white hover:bg-purple-50 text-purple-800 border border-purple-300 rounded inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                  >
+                                    <Undo2 className="w-3 h-3" />
+                                    {unsendingId === order.id ? 'Unsending...' : 'Unsend'}
+                                  </button>
+                                )}
 
                               {mode !== 'active' && (
                                 <button
@@ -2011,9 +2281,22 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                               </button>
                             </>
                           ) : (
-                            <span className="px-2 py-1 text-[11px] font-semibold bg-purple-700 text-white rounded">
-                              Sent ({order.createdByName})
-                            </span>
+                            <div className="inline-flex items-center gap-1">
+                              <span className="px-2 py-1 text-[11px] font-semibold bg-purple-700 text-white rounded">
+                                Sent ({order.createdByName})
+                              </span>
+                              <button
+                                type="button"
+                                disabled={unsendingId === order.id}
+                                onClick={() => handleQuickUnsend([order.id], order.id)}
+                                title={`Unsend transfer from ${order.createdByName} back to your dashboard`}
+                                aria-label="Unsend transfer"
+                                className="px-2 py-1 text-[11px] font-semibold bg-white hover:bg-purple-50 text-purple-800 border border-purple-300 rounded inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                              >
+                                <Undo2 className="w-3 h-3" />
+                                {unsendingId === order.id ? 'Unsending...' : 'Unsend'}
+                              </button>
+                            </div>
                           )}
                         </div>
                       </td>
@@ -2101,28 +2384,28 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
           </div>
         </div>
       </div>
-      {/* Wide Centered New Order Popup Modal — fits in one view without scrolling */}
+      {/* Compact Left-Right New Order Popup Modal */}
       {mode === 'active' && newOrderOpen && (
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="new-order-modal-title"
-          className="fixed inset-0 z-40 bg-slate-900/55 flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+          className="fixed inset-0 z-40 bg-slate-900/55 flex items-center justify-center p-2 sm:p-3 overflow-y-auto"
           onClick={() => setNewOrderOpen(false)}
         >
           <div
             className="w-full max-w-5xl bg-white border border-[#DCE4E0] rounded-xl shadow-2xl overflow-hidden my-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-5 py-3 bg-[#075E54] text-white flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Plus className="w-4 h-4 text-[#25D366]" />
-                <h2 id="new-order-modal-title" className="font-display text-base font-bold">
+            <div className="px-4 py-2 bg-[#075E54] text-white flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <Plus className="w-3.5 h-3.5 text-[#25D366]" />
+                <h2 id="new-order-modal-title" className="font-display text-sm font-bold">
                   New Order Entry
                 </h2>
               </div>
-              <div className="flex items-center gap-3">
-                <span className="text-xs text-white/90 font-mono-num">
+              <div className="flex items-center gap-2.5">
+                <span className="text-[11px] text-white/90 font-mono-num">
                   {(() => {
                     if (!newDate) return 'Not Confirm';
                     const tag = getIndianDayTag(newDate);
@@ -2134,720 +2417,895 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                   type="button"
                   onClick={() => setNewOrderOpen(false)}
                   aria-label="Close new order popup"
-                  className="p-1 rounded-lg hover:bg-white/15 text-white cursor-pointer"
+                  className="p-1 rounded hover:bg-white/15 text-white cursor-pointer"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
 
-            <form onSubmit={handleQuickAdd} className="p-4 sm:p-5 space-y-3 max-h-[90vh] overflow-y-auto">
-              {/* Row 1 (3 Columns): Phone Number | Customer Name | City Name */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-semibold text-slate-700">
-                      Phone Number <span className="text-red-600">*</span>
-                    </label>
-                    <span
-                      className={`text-[11px] font-mono-num font-semibold ${
-                        newNumber.length === 10
-                          ? 'text-[#075E54]'
-                          : newNumber.length > 0
-                          ? 'text-amber-700'
-                          : 'text-slate-400'
-                      }`}
-                    >
-                      {newNumber.length}/10
-                    </span>
-                  </div>
-                  <input
-                    autoFocus
-                    type="text"
-                    inputMode="numeric"
-                    minLength={10}
-                    maxLength={10}
-                    pattern="\d{10}"
-                    title="Minimum 10, maximum 10 digits"
-                    required
-                    value={newNumber}
-                    onChange={(e) => {
-                      const val = e.target.value.replace(/\D/g, '').slice(0, 10);
-                      setNewNumber(val);
-                      if (val.length < 10 && newAltNumber) {
-                        setNewAltNumber('');
-                      }
-                    }}
-                    placeholder="10-digit number"
-                    className={`w-full px-3 py-1.5 text-sm font-mono-num border rounded-lg focus:bg-white focus:outline-none ${
-                      duplicateMatches.some((m) => m.status === 'active')
-                        ? 'bg-red-50 border-red-400 focus:border-red-500'
-                        : duplicateMatches.length > 0
-                        ? 'bg-amber-50 border-amber-400 focus:border-amber-500'
-                        : 'bg-[#F7F9F8] border-[#DCE4E0] focus:border-[#128C7E]'
-                    }`}
-                  />
-
-                  {newNumber.length === 10 && (
-                    <div className="mt-2">
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-[11px] font-semibold text-slate-600">
-                          Alternate Number (Optional)
-                        </label>
-                        <span
-                          className={`text-[11px] font-mono-num font-semibold ${
-                            newAltNumber.length === 10
-                              ? 'text-[#075E54]'
-                              : newAltNumber.length > 0
-                              ? 'text-amber-700'
-                              : 'text-slate-400'
-                          }`}
-                        >
-                          {newAltNumber.length}/10
-                        </span>
-                      </div>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        minLength={10}
-                        maxLength={10}
-                        pattern="\d{10}"
-                        title="Minimum 10, maximum 10 digits"
-                        value={newAltNumber}
-                        onChange={(e) =>
-                          setNewAltNumber(e.target.value.replace(/\D/g, '').slice(0, 10))
-                        }
-                        placeholder="Alternate 10-digit number"
-                        className="w-full px-3 py-1.5 text-sm font-mono-num bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                      />
+            <form
+              onSubmit={handleQuickAdd}
+              className="p-3 max-h-[90vh] overflow-y-auto bg-white"
+            >
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-stretch">
+                {/* LEFT BOX: Customer & Booking Details */}
+                <div className="lg:col-span-5 bg-[#F1F7F4] border border-[#CFE0D6] rounded-lg p-2.5 space-y-2 flex flex-col justify-between">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between border-b border-[#D9E7DF] pb-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wide text-[#075E54]">
+                        1. Customer Details
+                      </span>
+                      <span className="text-[10px] text-slate-500">
+                        * Required
+                      </span>
                     </div>
-                  )}
-                </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Customer Name
-                  </label>
-                  <input
-                    type="text"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    placeholder="Optional"
-                    className="w-full px-3 py-1.5 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  />
-                </div>
+                    {/* Phone & Alt Phone (Inline once 10-digit Phone Number is filled) */}
+                    <div className={newNumber.length === 10 ? 'grid grid-cols-2 gap-2' : ''}>
+                      <div>
+                        <div className="flex items-center justify-between gap-1 mb-0.5">
+                          <label className="text-[11px] font-medium text-slate-700 truncate">
+                            Phone Number <span className="text-red-600">*</span>
+                          </label>
+                          <span
+                            className={`text-[10px] font-mono-num font-semibold shrink-0 ${
+                              newNumber.length === 10
+                                ? 'text-[#075E54]'
+                                : newNumber.length > 0
+                                ? 'text-amber-700'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            {newNumber.length}/10
+                          </span>
+                        </div>
+                        <input
+                          autoFocus
+                          type="text"
+                          inputMode="numeric"
+                          minLength={10}
+                          maxLength={10}
+                          pattern="\d{10}"
+                          title="Minimum 10, maximum 10 digits"
+                          required
+                          value={newNumber}
+                          onChange={(e) => {
+                            const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                            setNewNumber(val);
+                            if (val.length < 10 && newAltNumber) {
+                              setNewAltNumber('');
+                            }
+                          }}
+                          placeholder="10-digit number"
+                          className={`w-full px-2.5 py-1 text-xs font-mono-num border rounded-md focus:bg-white focus:outline-none ${
+                            duplicateMatches.some((m) => m.status === 'active')
+                              ? 'bg-red-50 border-red-400 focus:border-red-500'
+                              : duplicateMatches.length > 0
+                              ? 'bg-amber-50 border-amber-400 focus:border-amber-500'
+                              : 'bg-white border-[#CFE0D6] focus:border-[#128C7E]'
+                          }`}
+                        />
+                      </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    City Name
-                  </label>
-                  <select
-                    value={newCity}
-                    onChange={(e) => setNewCity(e.target.value)}
-                    className="w-full px-3 py-1.5 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  >
-                    {config.cities.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Multi-Service Selector (1 bar me ek ya ek se zyada services select karein) */}
-              <div>
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-                  <label className="text-xs font-semibold text-slate-700">
-                    Services (Click to select 1 or multiple — e.g. Water tank + Dry clean)
-                  </label>
-                  <span className="text-xs font-semibold text-[#075E54]">
-                    Selected: {newServices.join(' + ')}
-                  </span>
-                </div>
-                <div className="bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg p-1.5 flex flex-wrap gap-1.5">
-                  {config.services.map((s) => {
-                    const active = newServices.includes(s);
-                    return (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => toggleNewService(s)}
-                        className={`px-3 py-1 text-xs font-semibold rounded-md border inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
-                          active
-                            ? 'bg-[#075E54] text-white border-[#075E54]'
-                            : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
-                        }`}
-                      >
-                        {active ? (
-                          <Check className="w-3.5 h-3.5 text-[#25D366]" />
-                        ) : (
-                          <Plus className="w-3.5 h-3.5 text-slate-400" />
-                        )}
-                        {s}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Live Telecaller Duplicate Number Alert */}
-              {checkingDuplicate && (
-                <div className="text-xs text-slate-500 px-3 py-1.5 bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg">
-                  Checking central records for this phone number...
-                </div>
-              )}
-
-              {!checkingDuplicate && duplicateMatches.length > 0 && (
-                <div
-                  role="alert"
-                  className={`rounded-lg border p-2.5 text-xs space-y-1.5 ${
-                    duplicateMatches.some((m) => m.status === 'active')
-                      ? 'bg-red-50 border-red-300 text-red-950'
-                      : 'bg-amber-50 border-amber-300 text-amber-950'
-                  }`}
-                >
-                  <div className="flex items-center gap-1.5 font-bold">
-                    <AlertTriangle
-                      className={`w-4 h-4 shrink-0 ${
-                        duplicateMatches.some((m) => m.status === 'active')
-                          ? 'text-red-600'
-                          : 'text-amber-600'
-                      }`}
-                    />
-                    <span>
-                      {duplicateMatches.some((m) => m.status === 'active')
-                        ? `Order Already Taken! (${duplicateMatches.length} match)`
-                        : `Previous Order History (${duplicateMatches.length})`}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-32 overflow-y-auto">
-                    {duplicateMatches.slice(0, 4).map((m) => {
-                      const takenDate = m.createdAt
-                        ? new Date(m.createdAt).toLocaleDateString('en-IN', {
-                            day: '2-digit',
-                            month: '2-digit',
-                            year: '2-digit',
-                          })
-                        : '';
-                      return (
-                        <div
-                          key={m.id}
-                          className="bg-white/90 border border-black/10 rounded p-2 text-[11px] leading-snug"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-bold text-slate-900">
-                              Telecaller: {m.createdByName}
-                              {m.createdById === currentUser.id ? ' (You)' : ''}
-                            </span>
+                      {newNumber.length === 10 && (
+                        <div>
+                          <div className="flex items-center justify-between gap-1 mb-0.5">
+                            <label className="text-[11px] font-medium text-slate-700 truncate">
+                              Alternate Number (Optional)
+                            </label>
                             <span
-                              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                                m.status === 'active'
-                                  ? 'bg-red-100 text-red-700'
-                                  : 'bg-slate-200 text-slate-700'
+                              className={`text-[10px] font-mono-num font-semibold shrink-0 ${
+                                newAltNumber.length === 10
+                                  ? 'text-[#075E54]'
+                                  : newAltNumber.length > 0
+                                  ? 'text-amber-700'
+                                  : 'text-slate-400'
                               }`}
                             >
-                              {m.status}
+                              {newAltNumber.length}/10
                             </span>
                           </div>
-                          <div className="text-slate-700 mt-0.5">
-                            Name: <strong>{m.name || 'No Name'}</strong> · Booking:{' '}
-                            <strong className="font-mono-num">
-                              {formatIndianDate(m.bookingDate) || 'No Date'}
-                            </strong>
-                          </div>
-                          <div className="text-slate-600 mt-0.5">
-                            {m.serviceName} · {m.city} · ₹{m.price} · Cleaner: {m.cleanerName}
-                          </div>
-                          {m.address && (
-                            <div className="text-slate-500 truncate mt-0.5">Addr: {m.address}</div>
-                          )}
-                          {takenDate && (
-                            <div className="text-[10px] text-slate-400 mt-0.5">
-                              Entered on: {takenDate}
-                            </div>
-                          )}
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            minLength={10}
+                            maxLength={10}
+                            pattern="\d{10}"
+                            title="Minimum 10, maximum 10 digits"
+                            value={newAltNumber}
+                            onChange={(e) =>
+                              setNewAltNumber(e.target.value.replace(/\D/g, '').slice(0, 10))
+                            }
+                            placeholder="Alternate 10-digit"
+                            className="w-full px-2.5 py-1 text-xs font-mono-num bg-white border border-[#CFE0D6] rounded-md focus:outline-none focus:border-[#128C7E]"
+                          />
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Row 2 (2 Wide Columns): Full Address | Message / Note */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Full Address
-                  </label>
-                  <input
-                    type="text"
-                    value={newAddress}
-                    onChange={(e) => setNewAddress(e.target.value)}
-                    placeholder="House no., Sector, Landmark (optional)"
-                    className="w-full px-3 py-1.5 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Message / Note (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={newNotes}
-                    onChange={(e) => setNewNotes(e.target.value)}
-                    placeholder="Any extra instruction..."
-                    className="w-full px-3 py-1.5 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  />
-                </div>
-              </div>
-
-              {/* Row 3 (Water Tank Sizes with Qty & Manual Price when Water tank is selected) */}
-              {hasWaterTankSelected && (
-                <div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-                    <label className="text-xs font-semibold text-slate-700">
-                      Water Tank Quantity &amp; Manual Price (₹/unit)
-                    </label>
-                    {tankSummary.totalTanks > 0 && (
-                      <span className="text-xs text-[#075E54] font-semibold">
-                        Selected ({tankSummary.totalTanks}
-                        {tankSummary.totalPrice > 0
-                          ? ` · ₹${tankSummary.totalPrice.toLocaleString('en-IN')}`
-                          : ''}
-                        ): {tankSummary.text}
-                      </span>
-                    )}
-                  </div>
-                  <div className="bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg p-2">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                      {TANK_TYPES.map((t) => {
-                        const count = tankCounts[t.key] || 0;
-                        const rate = tankPrices[t.key] || 0;
-                        const lineTotal = count * rate;
-                        return (
-                          <div
-                            key={t.key}
-                            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded border text-xs ${
-                              count > 0 || rate > 0
-                                ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold'
-                                : 'bg-white border-[#DCE4E0] text-slate-700'
-                            }`}
-                          >
-                            <div className="min-w-0">
-                              <div className="truncate">{t.label}</div>
-                              {lineTotal > 0 && (
-                                <div className="text-[10px] font-mono-num text-[#128C7E]">
-                                  = ₹{lineTotal.toLocaleString('en-IN')}
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
-                                <span className="text-[10px] text-slate-400 mr-1">Qty</span>
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  value={count > 0 ? String(count) : ''}
-                                  onChange={(e) => setTankCountDirect(t.key, e.target.value)}
-                                  placeholder="0"
-                                  aria-label={`${t.label} qty`}
-                                  className="w-8 text-center font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
-                                />
-                              </div>
-                              <span className="text-[10px] text-slate-400">×</span>
-                              <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
-                                <span className="text-[10px] text-slate-400 mr-0.5">₹</span>
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  value={rate > 0 ? String(rate) : ''}
-                                  onChange={(e) => setTankPriceDirect(t.key, e.target.value)}
-                                  placeholder="Price"
-                                  aria-label={`${t.label} manual price`}
-                                  className="w-14 text-right font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
+                      )}
                     </div>
-                  </div>
-                </div>
-              )}
 
-              {/* Row 3A (Dry Clean Items with Qty & Manual Price when Dry clean is selected) */}
-              {hasDryCleanSelected && (
-                <div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-                    <label className="text-xs font-semibold text-slate-700">
-                      Dry Clean Items (Qty &amp; Manual Price ₹/unit)
-                    </label>
-                    {dryCleanSummary.totalItems > 0 && (
-                      <span className="text-xs text-[#075E54] font-semibold">
-                        Selected ({dryCleanSummary.totalItems}
-                        {dryCleanSummary.totalPrice > 0
-                          ? ` · ₹${dryCleanSummary.totalPrice.toLocaleString('en-IN')}`
-                          : ''}
-                        ): {dryCleanSummary.text}
-                      </span>
-                    )}
-                  </div>
-                  <div className="bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg p-2">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                      {DRY_CLEAN_ITEMS.map((item) => {
-                        const count = dryCleanCounts[item.key] || 0;
-                        const rate = dryCleanPrices[item.key] || 0;
-                        const lineTotal = count * rate;
-                        return (
-                          <div
-                            key={item.key}
-                            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded border text-xs ${
-                              count > 0 || rate > 0
-                                ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold'
-                                : 'bg-white border-[#DCE4E0] text-slate-700'
-                            }`}
-                          >
-                            <div className="min-w-0">
-                              <div className="truncate">{item.label}</div>
-                              {lineTotal > 0 && (
-                                <div className="text-[10px] font-mono-num text-[#128C7E]">
-                                  = ₹{lineTotal.toLocaleString('en-IN')}
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
-                                <span className="text-[10px] text-slate-400 mr-1">Qty</span>
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  value={count > 0 ? String(count) : ''}
-                                  onChange={(e) => setDryCleanCountDirect(item.key, e.target.value)}
-                                  placeholder="0"
-                                  aria-label={`${item.label} qty`}
-                                  className="w-8 text-center font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
-                                />
-                              </div>
-                              <span className="text-[10px] text-slate-400">×</span>
-                              <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
-                                <span className="text-[10px] text-slate-400 mr-0.5">₹</span>
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  value={rate > 0 ? String(rate) : ''}
-                                  onChange={(e) => setDryCleanPriceDirect(item.key, e.target.value)}
-                                  placeholder="Price"
-                                  aria-label={`${item.label} manual price`}
-                                  className="w-14 text-right font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Row 3B (Per-Service Quantity & Manual Price when Chimney, Bathroom, Kitchen, etc. are selected) */}
-              {hasOtherServiceSelected && (
-                <div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-                    <label className="text-xs font-semibold text-slate-700">
-                      Service Quantities &amp; Manual Price (₹/unit)
-                    </label>
-                    {serviceQtySummary.totalQty > 0 && (
-                      <span className="text-xs text-[#075E54] font-semibold">
-                        Selected
-                        {serviceQtySummary.totalPrice > 0
-                          ? ` (₹${serviceQtySummary.totalPrice.toLocaleString('en-IN')})`
-                          : ''}
-                        : {serviceQtySummary.text}
-                      </span>
-                    )}
-                  </div>
-                  <div className="bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg p-2">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                      {selectedNonTankServices.map((s) => {
-                        const qtyVal = serviceQuantities[s] || 0;
-                        const rate = servicePrices[s] || 0;
-                        const lineTotal = qtyVal * rate;
-                        const isSeats = s.toLowerCase() === 'sofa';
-                        const unitLabel = isSeats ? `${s} (Seats)` : s;
-                        return (
-                          <div
-                            key={s}
-                            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded border text-xs ${
-                              qtyVal > 0 || rate > 0
-                                ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold'
-                                : 'bg-white border-[#DCE4E0] text-slate-700'
-                            }`}
-                          >
-                            <div className="min-w-0">
-                              <div className="truncate">{unitLabel}</div>
-                              {lineTotal > 0 && (
-                                <div className="text-[10px] font-mono-num text-[#128C7E]">
-                                  = ₹{lineTotal.toLocaleString('en-IN')}
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
-                                <span className="text-[10px] text-slate-400 mr-1">
-                                  {isSeats ? 'Seats' : 'Qty'}
-                                </span>
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  value={qtyVal > 0 ? String(qtyVal) : ''}
-                                  onChange={(e) => setServiceQtyDirect(s, e.target.value)}
-                                  placeholder="0"
-                                  aria-label={`${unitLabel} qty`}
-                                  className="w-8 text-center font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
-                                />
-                              </div>
-                              <span className="text-[10px] text-slate-400">×</span>
-                              <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
-                                <span className="text-[10px] text-slate-400 mr-0.5">₹</span>
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  value={rate > 0 ? String(rate) : ''}
-                                  onChange={(e) => setServicePriceDirect(s, e.target.value)}
-                                  placeholder="Price"
-                                  aria-label={`${unitLabel} manual price`}
-                                  className="w-14 text-right font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Row 4: Total Price + Less Price (₹) | Assign Cleaner | Inline Indian Booking Date */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-start">
-                <div className="lg:col-span-4 space-y-1.5">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <div className="flex items-center justify-between gap-1 mb-1">
-                        <label className="text-xs font-semibold text-slate-700">
-                          Total Price (₹)
-                        </label>
-                        {autoCalculatedTotal > 0 && (
-                          priceManuallyEdited && Number(newPrice) !== autoCalculatedTotal ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPriceManuallyEdited(false);
-                                setNewPrice(String(autoCalculatedTotal));
-                              }}
-                              className="text-[10px] font-semibold text-[#128C7E] hover:underline cursor-pointer"
-                            >
-                              Use ₹{autoCalculatedTotal.toLocaleString('en-IN')}
-                            </button>
-                          ) : (
-                            <span className="text-[10px] font-semibold text-[#075E54]">
-                              Auto Sum
-                            </span>
-                          )
-                        )}
+                    {/* Live Telecaller Duplicate Number Alert */}
+                    {checkingDuplicate && (
+                      <div className="text-[11px] text-slate-500 px-2 py-1 bg-white border border-[#CFE0D6] rounded">
+                        Checking central records...
                       </div>
+                    )}
+
+                    {!checkingDuplicate && duplicateMatches.length > 0 && (
+                      <div
+                        role="alert"
+                        className={`rounded-md border p-2 text-[11px] space-y-1 ${
+                          duplicateMatches.some((m) => m.status === 'active')
+                            ? 'bg-red-50 border-red-300 text-red-950'
+                            : 'bg-amber-50 border-amber-300 text-amber-950'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1 font-bold">
+                          <AlertTriangle
+                            className={`w-3.5 h-3.5 shrink-0 ${
+                              duplicateMatches.some((m) => m.status === 'active')
+                                ? 'text-red-600'
+                                : 'text-amber-600'
+                            }`}
+                          />
+                          <span>
+                            {duplicateMatches.some((m) => m.status === 'active')
+                              ? `Order Already Taken! (${duplicateMatches.length})`
+                              : `Previous History (${duplicateMatches.length})`}
+                          </span>
+                        </div>
+
+                        <div className="space-y-1 max-h-24 overflow-y-auto">
+                          {duplicateMatches.slice(0, 3).map((m) => (
+                            <div
+                              key={m.id}
+                              className="bg-white/90 border border-black/10 rounded p-1.5 text-[10px] leading-tight"
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="font-bold text-slate-900">
+                                  {m.createdByName}
+                                  {m.createdById === currentUser.id ? ' (You)' : ''}
+                                </span>
+                                <span
+                                  className={`px-1 py-0.5 rounded text-[9px] font-semibold uppercase ${
+                                    m.status === 'active'
+                                      ? 'bg-red-100 text-red-700'
+                                      : 'bg-slate-200 text-slate-700'
+                                  }`}
+                                >
+                                  {m.status}
+                                </span>
+                              </div>
+                              <div className="text-slate-700 mt-0.5">
+                                {m.name || 'No Name'} ·{' '}
+                                <span className="font-mono-num font-semibold">
+                                  {formatIndianDate(m.bookingDate) || 'No Date'}
+                                </span>{' '}
+                                · {m.serviceName} · ₹{m.price}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Customer Name & City */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[11px] font-medium text-slate-700 mb-0.5">
+                          Customer Name
+                        </label>
+                        <input
+                          type="text"
+                          value={newName}
+                          onChange={(e) => setNewName(e.target.value)}
+                          placeholder="Optional"
+                          className="w-full px-2.5 py-1 text-xs bg-white border border-[#CFE0D6] rounded-md focus:outline-none focus:border-[#128C7E]"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-medium text-slate-700 mb-0.5">
+                          City Name
+                        </label>
+                        <select
+                          value={newCity}
+                          onChange={(e) => setNewCity(e.target.value)}
+                          className="w-full px-2 py-1 text-xs bg-white border border-[#CFE0D6] rounded-md focus:outline-none focus:border-[#128C7E]"
+                        >
+                          {config.cities.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Full Address */}
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-700 mb-0.5">
+                        Full Address
+                      </label>
                       <input
-                        type="number"
-                        min={0}
-                        value={newPrice}
-                        onChange={(e) => {
-                          setPriceManuallyEdited(true);
-                          setNewPrice(e.target.value);
-                        }}
-                        placeholder="Total Amount"
-                        className="w-full px-2.5 py-1.5 text-sm font-mono-num bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
+                        type="text"
+                        value={newAddress}
+                        onChange={(e) => setNewAddress(e.target.value)}
+                        placeholder="House no., Sector, Landmark (optional)"
+                        className="w-full px-2.5 py-1 text-xs bg-white border border-[#CFE0D6] rounded-md focus:outline-none focus:border-[#128C7E]"
                       />
                     </div>
 
-                    <div>
-                      <div className="flex items-center justify-between gap-1 mb-1">
-                        <label className="text-xs font-semibold text-slate-700">
-                          Less Price (₹)
+                    {/* Assign Cleaner & Message / Note */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[11px] font-medium text-slate-700 mb-0.5">
+                          Assign Cleaner
                         </label>
+                        <select
+                          value={newCleaner}
+                          onChange={(e) => setNewCleaner(e.target.value)}
+                          className="w-full px-2 py-1 text-xs bg-white border border-[#CFE0D6] rounded-md focus:outline-none focus:border-[#128C7E]"
+                        >
+                          {config.cleaners.map((cl) => (
+                            <option key={cl} value={cl}>
+                              {cl}
+                            </option>
+                          ))}
+                        </select>
                       </div>
-                      <div className="flex items-center bg-[#FFF8F6] border border-[#F3D0C8] rounded-lg px-2 focus-within:bg-white focus-within:border-red-400">
-                        <span className="text-xs font-bold text-red-500 mr-1">- ₹</span>
+
+                      <div>
+                        <label className="block text-[11px] font-medium text-slate-700 mb-0.5">
+                          Note (Optional)
+                        </label>
                         <input
-                          type="number"
-                          min={0}
-                          value={newLessPrice}
-                          onChange={(e) => setNewLessPrice(e.target.value)}
-                          placeholder="0"
-                          aria-label="Less Price"
-                          className="w-full py-1.5 text-sm font-mono-num bg-transparent focus:outline-none text-slate-800"
+                          type="text"
+                          value={newNotes}
+                          onChange={(e) => setNewNotes(e.target.value)}
+                          placeholder="Any instruction..."
+                          className="w-full px-2.5 py-1 text-xs bg-white border border-[#CFE0D6] rounded-md focus:outline-none focus:border-[#128C7E]"
                         />
                       </div>
                     </div>
                   </div>
+                </div>
 
-                  {Number(newLessPrice) > 0 && (() => {
-                    const gross = Math.max(0, Number(newPrice) || 0);
-                    const less = Math.max(0, Number(newLessPrice) || 0);
-                    const finalAmt = Math.max(0, gross - less);
-                    return (
-                      <div className="px-2.5 py-1 rounded bg-[#E9F7F0] border border-[#BFE6D1] flex items-center justify-between gap-2 text-[11px] font-mono-num">
-                        <span className="text-slate-600">
-                          ₹{gross.toLocaleString('en-IN')} - ₹{less.toLocaleString('en-IN')}
-                        </span>
-                        <span className="font-bold text-[#075E54]">
-                          = ₹{finalAmt.toLocaleString('en-IN')}
-                        </span>
+                {/* RIGHT BOX: Services, Qty, Price & Add Order Entry */}
+                <div className="lg:col-span-7 bg-[#FAF6EC] border border-[#E5DABF] rounded-lg p-2.5 flex flex-col justify-between space-y-2">
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-[#EAE0C8] pb-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wide text-amber-900">
+                        2. Service, Qty &amp; Price
+                      </span>
+                      <span className="text-[11px] font-semibold text-[#075E54]">
+                        {newServices.join(' + ')}
+                      </span>
+                    </div>
+
+                    {/* Multi-Service Selector */}
+                    <div className="flex flex-wrap gap-1">
+                      {config.services.map((s) => {
+                        const active = newServices.includes(s);
+                        return (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => toggleNewService(s)}
+                            className={`px-2 py-1 text-[11px] font-semibold rounded border inline-flex items-center gap-1 cursor-pointer transition-colors ${
+                              active
+                                ? 'bg-[#075E54] text-white border-[#075E54]'
+                                : 'bg-white text-slate-700 border-[#DFD4B8] hover:bg-[#F5EEDB]'
+                            }`}
+                          >
+                            {active ? (
+                              <Check className="w-3 h-3 text-[#25D366]" />
+                            ) : (
+                              <Plus className="w-3 h-3 text-slate-400" />
+                            )}
+                            {s}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Water Tank Qty & Price */}
+                    {hasWaterTankSelected && (
+                      <div>
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="text-[11px] font-semibold text-slate-700">
+                            Water Tank (Qty &amp; ₹/unit)
+                          </span>
+                          {tankSummary.totalTanks > 0 && (
+                            <span className="text-[10px] text-[#075E54] font-semibold font-mono-num">
+                              {tankSummary.totalTanks} tank{tankSummary.totalTanks > 1 ? 's' : ''}
+                              {tankSummary.totalPrice > 0
+                                ? ` · ₹${tankSummary.totalPrice.toLocaleString('en-IN')}`
+                                : ''}
+                            </span>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {TANK_TYPES.map((t) => {
+                            const count = tankCounts[t.key] || 0;
+                            const rate = tankPrices[t.key] || 0;
+                            const lineTotal = count * rate;
+                            return (
+                              <div
+                                key={t.key}
+                                className={`flex items-center justify-between gap-2 px-2 py-1.5 rounded-md border text-[11px] ${
+                                  count > 0 || rate > 0
+                                    ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold shadow-2xs'
+                                    : 'bg-white/95 border-[#E5DABF] text-slate-700'
+                                }`}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="leading-tight">{t.label}</div>
+                                  {lineTotal > 0 && (
+                                    <div className="text-[10px] font-mono-num text-[#128C7E]">
+                                      = ₹{lineTotal.toLocaleString('en-IN')}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <div className="inline-flex items-center border border-[#D4DDD8] rounded bg-[#F7F9F8] overflow-hidden focus-within:border-[#128C7E] focus-within:bg-white">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setTankCountDirect(t.key, String(Math.max(0, count - 1)))
+                                      }
+                                      disabled={count === 0}
+                                      aria-label={`Decrease ${t.label} qty`}
+                                      className="w-5 h-6 flex items-center justify-center text-xs font-bold text-slate-600 hover:bg-[#E7F2EC] disabled:opacity-35 disabled:hover:bg-transparent cursor-pointer"
+                                    >
+                                      -
+                                    </button>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      value={count > 0 ? String(count) : ''}
+                                      onChange={(e) => setTankCountDirect(t.key, e.target.value)}
+                                      placeholder="Qty"
+                                      aria-label={`${t.label} qty`}
+                                      className="w-8 h-6 text-center font-mono-num text-[11px] bg-transparent border-x border-[#E2E8E5] focus:outline-none text-slate-800 placeholder:text-[10px] placeholder:text-slate-400"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => setTankCountDirect(t.key, String(count + 1))}
+                                      aria-label={`Increase ${t.label} qty`}
+                                      className="w-5 h-6 flex items-center justify-center text-xs font-bold text-[#075E54] hover:bg-[#E7F2EC] cursor-pointer"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                  <span className="text-[10px] text-slate-400">×</span>
+                                  <div className="inline-flex items-center border border-[#D4DDD8] rounded bg-[#F7F9F8] px-1.5 h-6 focus-within:bg-white focus-within:border-[#128C7E]">
+                                    <span className="text-[10px] font-semibold text-slate-500 mr-0.5">
+                                      ₹
+                                    </span>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      value={rate > 0 ? String(rate) : ''}
+                                      onChange={(e) => setTankPriceDirect(t.key, e.target.value)}
+                                      placeholder={
+                                        count === 0 && t.defaultPrice > 0
+                                          ? String(t.defaultPrice)
+                                          : 'Price'
+                                      }
+                                      aria-label={`${t.label} manual price`}
+                                      className="w-14 text-right font-mono-num text-[11px] bg-transparent focus:outline-none text-slate-800 placeholder:text-[10px] placeholder:text-slate-400"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    );
-                  })()}
-                </div>
+                    )}
 
-                <div className="lg:col-span-2">
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Assign Cleaner
-                  </label>
-                  <select
-                    value={newCleaner}
-                    onChange={(e) => setNewCleaner(e.target.value)}
-                    className="w-full px-3 py-1.5 text-sm bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  >
-                    {config.cleaners.map((cl) => (
-                      <option key={cl} value={cl}>
-                        {cl}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                    {/* Dry Clean Qty & Price */}
+                    {hasDryCleanSelected && (
+                      <div>
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="text-[11px] font-semibold text-slate-700">
+                            Dry Clean Items (Qty &amp; ₹/unit)
+                          </span>
+                          {dryCleanSummary.totalItems > 0 && (
+                            <span className="text-[10px] text-[#075E54] font-semibold font-mono-num">
+                              {dryCleanSummary.totalItems} item{dryCleanSummary.totalItems > 1 ? 's' : ''}
+                              {dryCleanSummary.totalPrice > 0
+                                ? ` · ₹${dryCleanSummary.totalPrice.toLocaleString('en-IN')}`
+                                : ''}
+                            </span>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {DRY_CLEAN_ITEMS.map((item) => {
+                            const count = dryCleanCounts[item.key] || 0;
+                            const rate = dryCleanPrices[item.key] || 0;
+                            const lineTotal = count * rate;
+                            return (
+                              <div
+                                key={item.key}
+                                className={`flex items-center justify-between gap-2 px-2 py-1.5 rounded-md border text-[11px] ${
+                                  count > 0 || rate > 0
+                                    ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold shadow-2xs'
+                                    : 'bg-white/95 border-[#E5DABF] text-slate-700'
+                                }`}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="leading-tight">{item.label}</div>
+                                  {lineTotal > 0 && (
+                                    <div className="text-[10px] font-mono-num text-[#128C7E]">
+                                      = ₹{lineTotal.toLocaleString('en-IN')}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <div className="inline-flex items-center border border-[#D4DDD8] rounded bg-[#F7F9F8] overflow-hidden focus-within:border-[#128C7E] focus-within:bg-white">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setDryCleanCountDirect(
+                                          item.key,
+                                          String(Math.max(0, count - 1))
+                                        )
+                                      }
+                                      disabled={count === 0}
+                                      aria-label={`Decrease ${item.label} qty`}
+                                      className="w-5 h-6 flex items-center justify-center text-xs font-bold text-slate-600 hover:bg-[#E7F2EC] disabled:opacity-35 disabled:hover:bg-transparent cursor-pointer"
+                                    >
+                                      -
+                                    </button>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      value={count > 0 ? String(count) : ''}
+                                      onChange={(e) =>
+                                        setDryCleanCountDirect(item.key, e.target.value)
+                                      }
+                                      placeholder="Qty"
+                                      aria-label={`${item.label} qty`}
+                                      className="w-8 h-6 text-center font-mono-num text-[11px] bg-transparent border-x border-[#E2E8E5] focus:outline-none text-slate-800 placeholder:text-[10px] placeholder:text-slate-400"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setDryCleanCountDirect(item.key, String(count + 1))
+                                      }
+                                      aria-label={`Increase ${item.label} qty`}
+                                      className="w-5 h-6 flex items-center justify-center text-xs font-bold text-[#075E54] hover:bg-[#E7F2EC] cursor-pointer"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                  <span className="text-[10px] text-slate-400">×</span>
+                                  <div className="inline-flex items-center border border-[#D4DDD8] rounded bg-[#F7F9F8] px-1.5 h-6 focus-within:bg-white focus-within:border-[#128C7E]">
+                                    <span className="text-[10px] font-semibold text-slate-500 mr-0.5">
+                                      ₹
+                                    </span>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      value={rate > 0 ? String(rate) : ''}
+                                      onChange={(e) =>
+                                        setDryCleanPriceDirect(item.key, e.target.value)
+                                      }
+                                      placeholder={
+                                        count === 0 && item.defaultPrice > 0
+                                          ? String(item.defaultPrice)
+                                          : 'Price'
+                                      }
+                                      aria-label={`${item.label} manual price`}
+                                      className="w-14 text-right font-mono-num text-[11px] bg-transparent focus:outline-none text-slate-800 placeholder:text-[10px] placeholder:text-slate-400"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
-                <div className="lg:col-span-6">
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-semibold text-slate-700">
-                      Booking Date (Req.)
-                    </label>
-                    <span
-                      className={`text-xs font-mono-num font-semibold ${
-                        dateSelectionMode === 'date' && newDate
-                          ? 'text-[#075E54]'
-                          : dateSelectionMode === 'not_confirm'
-                          ? 'text-amber-700'
-                          : 'text-slate-400'
-                      }`}
-                    >
-                      {dateSelectionMode === 'date' && newDate
-                        ? formatIndianDate(newDate)
-                        : dateSelectionMode === 'not_confirm'
-                        ? 'Not Confirm'
-                        : 'Select Date'}
-                    </span>
+                    {/* Home Cleaning Qty & Manual Price */}
+                    {hasHomeCleaningSelected && (
+                      <div>
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="text-[11px] font-semibold text-slate-700">
+                            Home Cleaning Areas (Qty &amp; ₹/unit)
+                          </span>
+                          {homeCleaningSummary.totalItems > 0 && (
+                            <span className="text-[10px] text-[#075E54] font-semibold font-mono-num">
+                              {homeCleaningSummary.totalItems} item
+                              {homeCleaningSummary.totalItems > 1 ? 's' : ''}
+                              {homeCleaningSummary.totalPrice > 0
+                                ? ` · ₹${homeCleaningSummary.totalPrice.toLocaleString('en-IN')}`
+                                : ''}
+                            </span>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {HOME_CLEANING_ITEMS.map((item) => {
+                            const count = homeCleaningCounts[item.key] || 0;
+                            const rate = homeCleaningPrices[item.key] || 0;
+                            const lineTotal = count * rate;
+                            return (
+                              <div
+                                key={item.key}
+                                className={`flex items-center justify-between gap-2 px-2 py-1.5 rounded-md border text-[11px] ${
+                                  count > 0 || rate > 0
+                                    ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold shadow-2xs'
+                                    : 'bg-white/95 border-[#E5DABF] text-slate-700'
+                                }`}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="leading-tight truncate">{item.label}</div>
+                                  {lineTotal > 0 && (
+                                    <div className="text-[10px] font-mono-num text-[#128C7E]">
+                                      = ₹{lineTotal.toLocaleString('en-IN')}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <div className="inline-flex items-center border border-[#D4DDD8] rounded bg-[#F7F9F8] overflow-hidden focus-within:border-[#128C7E] focus-within:bg-white">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setHomeCleaningCountDirect(
+                                          item.key,
+                                          String(Math.max(0, count - 1))
+                                        )
+                                      }
+                                      disabled={count === 0}
+                                      aria-label={`Decrease ${item.label} qty`}
+                                      className="w-5 h-6 flex items-center justify-center text-xs font-bold text-slate-600 hover:bg-[#E7F2EC] disabled:opacity-35 disabled:hover:bg-transparent cursor-pointer"
+                                    >
+                                      -
+                                    </button>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      value={count > 0 ? String(count) : ''}
+                                      onChange={(e) =>
+                                        setHomeCleaningCountDirect(item.key, e.target.value)
+                                      }
+                                      placeholder="Qty"
+                                      aria-label={`${item.label} qty`}
+                                      className="w-8 h-6 text-center font-mono-num text-[11px] bg-transparent border-x border-[#E2E8E5] focus:outline-none text-slate-800 placeholder:text-[10px] placeholder:text-slate-400"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setHomeCleaningCountDirect(item.key, String(count + 1))
+                                      }
+                                      aria-label={`Increase ${item.label} qty`}
+                                      className="w-5 h-6 flex items-center justify-center text-xs font-bold text-[#075E54] hover:bg-[#E7F2EC] cursor-pointer"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                  <span className="text-[10px] text-slate-400">×</span>
+                                  <div className="inline-flex items-center border border-[#D4DDD8] rounded bg-[#F7F9F8] px-1.5 h-6 focus-within:bg-white focus-within:border-[#128C7E]">
+                                    <span className="text-[10px] font-semibold text-slate-500 mr-0.5">
+                                      ₹
+                                    </span>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      value={rate > 0 ? String(rate) : ''}
+                                      onChange={(e) =>
+                                        setHomeCleaningPriceDirect(item.key, e.target.value)
+                                      }
+                                      placeholder="Price"
+                                      aria-label={`${item.label} manual price`}
+                                      className="w-14 text-right font-mono-num text-[11px] bg-transparent focus:outline-none text-slate-800 placeholder:text-[10px] placeholder:text-slate-400"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Other Services Qty & Price */}
+                    {hasOtherServiceSelected && (
+                      <div>
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="text-[11px] font-semibold text-slate-700">
+                            Service Qty &amp; ₹/unit
+                          </span>
+                          {serviceQtySummary.totalQty > 0 && (
+                            <span className="text-[10px] text-[#075E54] font-semibold font-mono-num">
+                              Qty: {serviceQtySummary.totalQty}
+                              {serviceQtySummary.totalPrice > 0
+                                ? ` · ₹${serviceQtySummary.totalPrice.toLocaleString('en-IN')}`
+                                : ''}
+                            </span>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {selectedNonTankServices.map((s) => {
+                            const qtyVal = serviceQuantities[s] || 0;
+                            const rate = servicePrices[s] || 0;
+                            const defaultPrice = getDefaultServicePrice(s);
+                            const lineTotal = qtyVal * rate;
+                            const isSeats = s.toLowerCase() === 'sofa';
+                            const unitLabel = isSeats ? `${s} (Seats)` : s;
+                            return (
+                              <div
+                                key={s}
+                                className={`flex items-center justify-between gap-2 px-2 py-1.5 rounded-md border text-[11px] ${
+                                  qtyVal > 0 || rate > 0
+                                    ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold shadow-2xs'
+                                    : 'bg-white/95 border-[#E5DABF] text-slate-700'
+                                }`}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="leading-tight">{unitLabel}</div>
+                                  {lineTotal > 0 && (
+                                    <div className="text-[10px] font-mono-num text-[#128C7E]">
+                                      = ₹{lineTotal.toLocaleString('en-IN')}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <div className="inline-flex items-center border border-[#D4DDD8] rounded bg-[#F7F9F8] overflow-hidden focus-within:border-[#128C7E] focus-within:bg-white">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setServiceQtyDirect(s, String(Math.max(0, qtyVal - 1)))
+                                      }
+                                      disabled={qtyVal === 0}
+                                      aria-label={`Decrease ${unitLabel} qty`}
+                                      className="w-5 h-6 flex items-center justify-center text-xs font-bold text-slate-600 hover:bg-[#E7F2EC] disabled:opacity-35 disabled:hover:bg-transparent cursor-pointer"
+                                    >
+                                      -
+                                    </button>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      value={qtyVal > 0 ? String(qtyVal) : ''}
+                                      onChange={(e) => setServiceQtyDirect(s, e.target.value)}
+                                      placeholder={isSeats ? 'Seats' : 'Qty'}
+                                      aria-label={`${unitLabel} qty`}
+                                      className="w-8 h-6 text-center font-mono-num text-[11px] bg-transparent border-x border-[#E2E8E5] focus:outline-none text-slate-800 placeholder:text-[10px] placeholder:text-slate-400"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => setServiceQtyDirect(s, String(qtyVal + 1))}
+                                      aria-label={`Increase ${unitLabel} qty`}
+                                      className="w-5 h-6 flex items-center justify-center text-xs font-bold text-[#075E54] hover:bg-[#E7F2EC] cursor-pointer"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                  <span className="text-[10px] text-slate-400">×</span>
+                                  <div className="inline-flex items-center border border-[#D4DDD8] rounded bg-[#F7F9F8] px-1.5 h-6 focus-within:bg-white focus-within:border-[#128C7E]">
+                                    <span className="text-[10px] font-semibold text-slate-500 mr-0.5">
+                                      ₹
+                                    </span>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      value={rate > 0 ? String(rate) : ''}
+                                      onChange={(e) => setServicePriceDirect(s, e.target.value)}
+                                      placeholder={
+                                        qtyVal === 0 && defaultPrice > 0
+                                          ? String(defaultPrice)
+                                          : 'Price'
+                                      }
+                                      aria-label={`${unitLabel} manual price`}
+                                      className="w-14 text-right font-mono-num text-[11px] bg-transparent focus:outline-none text-slate-800 placeholder:text-[10px] placeholder:text-slate-400"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
-                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5">
-                    {[
-                      { label: 'Aj', date: todayStr(0) },
-                      { label: 'Kal', date: todayStr(1) },
-                      { label: 'Parso', date: todayStr(2) },
-                    ].map((opt) => {
-                      const active =
-                        dateSelectionMode === 'date' && !customDateOpen && newDate === opt.date;
-                      return (
-                        <button
-                          key={opt.label}
-                          type="button"
-                          onClick={() => {
-                            setNewDate(opt.date);
-                            setDateSelectionMode('date');
-                            setCustomDateOpen(false);
-                          }}
-                          className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg border cursor-pointer transition-colors whitespace-nowrap ${
-                            active
-                              ? 'bg-[#075E54] text-white border-[#075E54]'
-                              : 'bg-[#F7F9F8] text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                  {/* Booking Date + Price + Less Price + Submit Footer inside Right Box */}
+                  <div className="space-y-2 pt-2 border-t border-[#EAE0C8]">
+                    {/* Booking Date */}
+                    <div>
+                      <div className="flex items-center justify-between mb-0.5">
+                        <label className="text-[11px] font-medium text-slate-700">
+                          Booking Date <span className="text-red-600">*</span>
+                        </label>
+                        <span
+                          className={`text-[10px] font-mono-num font-semibold ${
+                            dateSelectionMode === 'date' && newDate
+                              ? 'text-[#075E54]'
+                              : dateSelectionMode === 'not_confirm'
+                              ? 'text-amber-700'
+                              : 'text-slate-400'
                           }`}
                         >
-                          {opt.label}
+                          {dateSelectionMode === 'date' && newDate
+                            ? formatIndianDate(newDate)
+                            : dateSelectionMode === 'not_confirm'
+                            ? 'Not Confirm'
+                            : 'Select Date'}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1">
+                        {[
+                          { label: 'Aj', date: todayStr(0) },
+                          { label: 'Kal', date: todayStr(1) },
+                          { label: 'Parso', date: todayStr(2) },
+                        ].map((opt) => {
+                          const active =
+                            dateSelectionMode === 'date' && !customDateOpen && newDate === opt.date;
+                          return (
+                            <button
+                              key={opt.label}
+                              type="button"
+                              onClick={() => {
+                                setNewDate(opt.date);
+                                setDateSelectionMode('date');
+                                setCustomDateOpen(false);
+                              }}
+                              className={`flex-1 py-1 px-2 text-[11px] font-semibold rounded border cursor-pointer transition-colors whitespace-nowrap ${
+                                active
+                                  ? 'bg-[#075E54] text-white border-[#075E54]'
+                                  : 'bg-white text-slate-700 border-[#DFD4B8] hover:bg-[#F5EEDB]'
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomDateOpen((prev) => !prev);
+                          }}
+                          className={`flex-1 py-1 px-2 text-[11px] font-semibold rounded border cursor-pointer transition-colors whitespace-nowrap ${
+                            customDateOpen ||
+                            (dateSelectionMode === 'date' && Boolean(newDate) && !getIndianDayTag(newDate))
+                              ? 'bg-[#075E54] text-white border-[#075E54]'
+                              : 'bg-white text-slate-700 border-[#DFD4B8] hover:bg-[#F5EEDB]'
+                          }`}
+                        >
+                          Date
                         </button>
-                      );
-                    })}
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCustomDateOpen((prev) => !prev);
-                      }}
-                      className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg border cursor-pointer transition-colors whitespace-nowrap ${
-                        customDateOpen ||
-                        (dateSelectionMode === 'date' && Boolean(newDate) && !getIndianDayTag(newDate))
-                          ? 'bg-[#075E54] text-white border-[#075E54]'
-                          : 'bg-[#F7F9F8] text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
-                      }`}
-                    >
-                      Date
-                    </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNewDate('');
+                            setDateSelectionMode('not_confirm');
+                            setCustomDateOpen(false);
+                          }}
+                          className={`shrink-0 py-1 px-2 text-[11px] font-semibold rounded border cursor-pointer transition-colors whitespace-nowrap ${
+                            !customDateOpen && dateSelectionMode === 'not_confirm'
+                              ? 'bg-amber-600 text-white border-amber-600'
+                              : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                          }`}
+                        >
+                          Not Confirm
+                        </button>
+                      </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setNewDate('');
-                        setDateSelectionMode('not_confirm');
-                        setCustomDateOpen(false);
-                      }}
-                      className={`shrink-0 py-1.5 px-2.5 text-xs font-semibold rounded-lg border cursor-pointer transition-colors whitespace-nowrap ${
-                        !customDateOpen && dateSelectionMode === 'not_confirm'
-                          ? 'bg-amber-600 text-white border-amber-600'
-                          : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
-                      }`}
-                    >
-                      Not Confirm
-                    </button>
-                  </div>
-
-                  {(customDateOpen ||
-                    (dateSelectionMode === 'date' && Boolean(newDate) && !getIndianDayTag(newDate))) && (
-                    <div className="mt-1.5 flex items-center gap-2">
-                      <IndianDateInput
-                        ariaLabel="Select custom booking date"
-                        title="Custom Date (DD/MM/YY)"
-                        value={newDate}
-                        onChange={(val) => {
-                          if (val) {
-                            setNewDate(val);
-                            setDateSelectionMode('date');
-                          }
-                        }}
-                        className="flex-1 rounded-lg border-[#128C7E]"
-                      />
+                      {(customDateOpen ||
+                        (dateSelectionMode === 'date' && Boolean(newDate) && !getIndianDayTag(newDate))) && (
+                        <div className="mt-1 flex items-center gap-1.5">
+                          <IndianDateInput
+                            ariaLabel="Select custom booking date"
+                            title="Custom Date (DD/MM/YY)"
+                            value={newDate}
+                            onChange={(val) => {
+                              if (val) {
+                                setNewDate(val);
+                                setDateSelectionMode('date');
+                              }
+                            }}
+                            className="flex-1 rounded-md border-[#128C7E]"
+                          />
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              </div>
 
-              {/* Modal Footer */}
-              <div className="flex items-center justify-end gap-2.5 pt-2.5 border-t border-[#DCE4E0]">
-                <button
-                  type="button"
-                  onClick={() => setNewOrderOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold bg-white border border-[#DCE4E0] hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={adding}
-                  className="px-6 py-2 bg-[#128C7E] hover:bg-[#075E54] disabled:opacity-60 text-white text-sm font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  {adding ? 'Adding Order...' : 'Add Order Entry'}
-                </button>
+                    {Number(newLessPrice) > 0 && (() => {
+                      const gross = Math.max(0, Number(newPrice) || 0);
+                      const less = Math.max(0, Number(newLessPrice) || 0);
+                      const finalAmt = Math.max(0, gross - less);
+                      return (
+                        <div className="px-2 py-1 rounded bg-[#E9F7F0] border border-[#BFE6D1] flex items-center justify-between gap-2 text-[11px] font-mono-num">
+                          <span className="text-slate-600">
+                            ₹{gross.toLocaleString('en-IN')} - ₹{less.toLocaleString('en-IN')}
+                          </span>
+                          <span className="font-bold text-[#075E54]">
+                            Net = ₹{finalAmt.toLocaleString('en-IN')}
+                          </span>
+                        </div>
+                      );
+                    })()}
+
+                    <div className="flex flex-wrap sm:flex-nowrap items-end gap-2">
+                      <div className="flex-1 min-w-[95px]">
+                        <div className="flex items-center justify-between gap-1 mb-0.5">
+                          <label className="text-[11px] font-medium text-slate-700 whitespace-nowrap">
+                            Total Price (₹)
+                          </label>
+                          {autoCalculatedTotal > 0 && (
+                            priceManuallyEdited && Number(newPrice) !== autoCalculatedTotal ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPriceManuallyEdited(false);
+                                  setNewPrice(String(autoCalculatedTotal));
+                                }}
+                                className="text-[10px] font-semibold text-[#128C7E] hover:underline cursor-pointer whitespace-nowrap"
+                              >
+                                Use ₹{autoCalculatedTotal.toLocaleString('en-IN')}
+                              </button>
+                            ) : (
+                              <span className="text-[10px] font-semibold text-[#075E54]">
+                                Auto
+                              </span>
+                            )
+                          )}
+                        </div>
+                        <input
+                          type="number"
+                          min={0}
+                          value={newPrice}
+                          onChange={(e) => {
+                            setPriceManuallyEdited(true);
+                            setNewPrice(e.target.value);
+                          }}
+                          placeholder="Amount"
+                          className="w-full h-[30px] px-2 text-xs font-mono-num bg-white border border-[#DFD4B8] rounded-md focus:outline-none focus:border-[#128C7E]"
+                        />
+                      </div>
+
+                      <div className="flex-1 min-w-[85px]">
+                        <label className="block text-[11px] font-medium text-slate-700 mb-0.5 whitespace-nowrap">
+                          Less Price (₹)
+                        </label>
+                        <div className="flex items-center h-[30px] bg-[#FFF8F6] border border-[#F3D0C8] rounded-md px-2 focus-within:bg-white focus-within:border-red-400">
+                          <span className="text-[11px] font-bold text-red-500 mr-1 shrink-0">- ₹</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={newLessPrice}
+                            onChange={(e) => setNewLessPrice(e.target.value)}
+                            placeholder="0"
+                            aria-label="Less Price"
+                            className="w-full py-1 text-xs font-mono-num bg-transparent focus:outline-none text-slate-800"
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setNewOrderOpen(false)}
+                        className="h-[30px] px-2.5 text-[11px] font-semibold bg-white border border-[#DFD4B8] hover:bg-slate-50 text-slate-700 rounded-md cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={adding}
+                        className="h-[30px] px-3 bg-[#128C7E] hover:bg-[#075E54] disabled:opacity-60 text-white text-xs font-semibold rounded-md flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        {adding ? 'Adding...' : 'Add Order Entry'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
             </form>
           </div>
@@ -2925,6 +3383,11 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
           const transferredSet = new Set(ids);
           setSelectedIds((prev) => prev.filter((id) => !transferredSet.has(id)));
         }}
+        onUntransfer={async (ids) => {
+          await onUntransferOrders(ids);
+          const untransferredSet = new Set(ids);
+          setSelectedIds((prev) => prev.filter((id) => !untransferredSet.has(id)));
+        }}
       />
 
       {/* Edit Services & Quantities Modal */}
@@ -2932,6 +3395,14 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
         order={serviceEditOrder}
         services={config.services}
         onClose={() => setServiceEditOrder(null)}
+        onSave={onUpdateOrder}
+      />
+
+      {/* Full Order Edit Modal */}
+      <OrderEditModal
+        order={editTargetOrder}
+        config={config}
+        onClose={() => setEditTargetOrder(null)}
         onSave={onUpdateOrder}
       />
     </div>

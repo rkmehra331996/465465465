@@ -246,6 +246,18 @@ export async function transferOrders(
   });
 }
 
+export async function untransferOrders(
+  ids: string[]
+): Promise<{
+  ok: boolean;
+  orders: Order[];
+}> {
+  return apiFetch('/api/orders/untransfer', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  });
+}
+
 export interface HostingerConfigInput {
   mode: 'none' | 'mysql' | 'webhook';
   autoSync: boolean;

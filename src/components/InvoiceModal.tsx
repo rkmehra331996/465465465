@@ -8,7 +8,12 @@ import {
 } from 'lucide-react';
 import { formatIndianDate, getOrderTotal } from '../lib/api';
 import { IndianDateInput } from './IndianDateInput';
-import type { Order } from '../types';
+import {
+  DRY_CLEAN_ITEMS,
+  HOME_CLEANING_ITEMS,
+  SERVICE_OPTIONS,
+  type Order,
+} from '../types';
 
 interface InvoiceModalProps {
   order: Order | null;
@@ -91,6 +96,270 @@ function buildDefaultInvoiceNo(order: Order): string {
   return `CCC-${datePart}-${idPart}`;
 }
 
+const TANK_INVOICE_LABELS = [
+  '500 Ltr',
+  '750 Ltr',
+  '1000 Ltr',
+  '1500 Ltr',
+  '2000 Ltr',
+  'Cement Tank',
+] as const;
+
+interface InvoiceLineItem {
+  label: string;
+  qty: number | null;
+  rate: number | null;
+  amount: number | null;
+}
+
+interface ParsedInvoiceBreakdown {
+  items: InvoiceLineItem[];
+  adjustment: number;
+  adjustmentLabel: string;
+  extraNotes: string[];
+}
+
+function parseInvoiceBreakdown(order: Order): ParsedInvoiceBreakdown {
+  const selectedServices = (order.serviceName || '')
+    .split('+')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const items: InvoiceLineItem[] = [];
+  const extraNotes: string[] = [];
+  const coveredServiceKeys = new Set<string>();
+  let lessFromNotes = 0;
+
+  const segments = (order.notes || '')
+    .split('|')
+    .map((seg) => seg.trim())
+    .filter(Boolean);
+
+  for (const seg of segments) {
+    const lessMatch = /^Less:\s*₹?\s*(\d+(?:\.\d+)?)$/i.exec(seg);
+    if (lessMatch) {
+      const parsedLess = Math.round(Number(lessMatch[1]) * 100) / 100;
+      if (parsedLess > 0) lessFromNotes += parsedLess;
+      continue;
+    }
+
+    const parts = seg.split(',').map((p) => p.trim()).filter(Boolean);
+
+    // 1. Water Tank segment
+    let matchedTankSeg = parts.length > 0;
+    const tempTanks: InvoiceLineItem[] = [];
+    for (const part of parts) {
+      const tankMatch =
+        /^(500 Ltr|750 Ltr|1000 Ltr|1500 Ltr|2000 Ltr|Cement Tank)\s*[×x*]\s*(\d+(?:\.\d+)?)(?:\s*@\s*₹?\s*(\d+(?:\.\d+)?))?$/i.exec(
+          part
+        );
+      if (!tankMatch) {
+        matchedTankSeg = false;
+        break;
+      }
+      const matchedLabel = TANK_INVOICE_LABELS.find(
+        (t) => t.toLowerCase() === tankMatch[1].trim().toLowerCase()
+      );
+      if (!matchedLabel) {
+        matchedTankSeg = false;
+        break;
+      }
+      const cnt = Number(tankMatch[2]);
+      const rate = tankMatch[3] ? Math.round(Number(tankMatch[3]) * 100) / 100 : 0;
+      if (cnt > 0) {
+        tempTanks.push({
+          label: matchedLabel === 'Cement Tank' ? 'Cement Tank' : `Water Tank (${matchedLabel})`,
+          qty: cnt,
+          rate: rate > 0 ? rate : null,
+          amount: rate > 0 ? Math.round(cnt * rate * 100) / 100 : null,
+        });
+      }
+    }
+    if (matchedTankSeg) {
+      items.push(...tempTanks);
+      coveredServiceKeys.add('water tank');
+      continue;
+    }
+
+    // 2. Dry Clean segment
+    let matchedDryCleanSeg = parts.length > 0;
+    const tempDryClean: InvoiceLineItem[] = [];
+    for (const part of parts) {
+      const dcMatch = /^(.+?)\s*[×x*]\s*(\d+(?:\.\d+)?)(?:\s*@\s*₹?\s*(\d+(?:\.\d+)?))?$/i.exec(
+        part
+      );
+      if (!dcMatch) {
+        matchedDryCleanSeg = false;
+        break;
+      }
+      const dcDef = DRY_CLEAN_ITEMS.find(
+        (item) => item.label.toLowerCase() === dcMatch[1].trim().toLowerCase()
+      );
+      if (!dcDef) {
+        matchedDryCleanSeg = false;
+        break;
+      }
+      const cnt = Number(dcMatch[2]);
+      const rate = dcMatch[3] ? Math.round(Number(dcMatch[3]) * 100) / 100 : 0;
+      if (cnt > 0) {
+        tempDryClean.push({
+          label: `Dry Clean - ${dcDef.label}`,
+          qty: cnt,
+          rate: rate > 0 ? rate : null,
+          amount: rate > 0 ? Math.round(cnt * rate * 100) / 100 : null,
+        });
+      }
+    }
+    if (matchedDryCleanSeg) {
+      items.push(...tempDryClean);
+      coveredServiceKeys.add('dry clean');
+      continue;
+    }
+
+    // 3. Home Cleaning segment
+    let matchedHomeSeg = parts.length > 0;
+    const tempHome: InvoiceLineItem[] = [];
+    for (const part of parts) {
+      const hcMatch =
+        /^(?:Home Cleaning:\s*)?(.+?)\s*[×x*]\s*(\d+(?:\.\d+)?)(?:\s*@\s*₹?\s*(\d+(?:\.\d+)?))?$/i.exec(
+          part
+        );
+      if (!hcMatch) {
+        matchedHomeSeg = false;
+        break;
+      }
+      const hcDef = HOME_CLEANING_ITEMS.find(
+        (item) => item.label.toLowerCase() === hcMatch[1].trim().toLowerCase()
+      );
+      if (!hcDef) {
+        matchedHomeSeg = false;
+        break;
+      }
+      const cnt = Number(hcMatch[2]);
+      const rate = hcMatch[3] ? Math.round(Number(hcMatch[3]) * 100) / 100 : 0;
+      if (cnt > 0) {
+        tempHome.push({
+          label: `Home Cleaning - ${hcDef.label}`,
+          qty: cnt,
+          rate: rate > 0 ? rate : null,
+          amount: rate > 0 ? Math.round(cnt * rate * 100) / 100 : null,
+        });
+      }
+    }
+    if (matchedHomeSeg) {
+      items.push(...tempHome);
+      coveredServiceKeys.add('home cleaning');
+      continue;
+    }
+
+    // 4. Other services segment (e.g. Bathroom: 2 @ ₹600, Chimney: 1 @ ₹1200)
+    let matchedServiceSeg = parts.length > 0;
+    const tempService: InvoiceLineItem[] = [];
+    for (const part of parts) {
+      const svcMatch =
+        /^(.+?):\s*(\d+(?:\.\d+)?)(?:\s*Seats?)?(?:\s*@\s*₹?\s*(\d+(?:\.\d+)?))?$/i.exec(part);
+      if (!svcMatch) {
+        matchedServiceSeg = false;
+        break;
+      }
+      const rawSvc = svcMatch[1].trim();
+      const matchedName =
+        selectedServices.find((s) => s.toLowerCase() === rawSvc.toLowerCase()) ||
+        SERVICE_OPTIONS.find((s) => s.toLowerCase() === rawSvc.toLowerCase());
+      if (!matchedName || matchedName.toLowerCase() === 'water tank') {
+        matchedServiceSeg = false;
+        break;
+      }
+      const cnt = Number(svcMatch[2]);
+      const rate = svcMatch[3] ? Math.round(Number(svcMatch[3]) * 100) / 100 : 0;
+      if (cnt > 0) {
+        tempService.push({
+          label: matchedName,
+          qty: cnt,
+          rate: rate > 0 ? rate : null,
+          amount: rate > 0 ? Math.round(cnt * rate * 100) / 100 : null,
+        });
+        coveredServiceKeys.add(matchedName.toLowerCase());
+      }
+    }
+    if (matchedServiceSeg) {
+      items.push(...tempService);
+      continue;
+    }
+
+    extraNotes.push(seg);
+  }
+
+  const baseTotal = Math.round(Number(order.price || 0) * 100) / 100;
+  let adjustment = 0;
+  let adjustmentLabel = '';
+
+  if (items.length === 0) {
+    const qtyVal = order.qty && order.qty > 0 ? order.qty : 1;
+    const isExactDivision =
+      qtyVal === 1 || (qtyVal > 0 && Math.round(baseTotal * 100) % qtyVal === 0);
+    items.push({
+      label: order.serviceName || 'Cleaning Service',
+      qty: qtyVal,
+      rate: isExactDivision ? Math.round((baseTotal / qtyVal) * 100) / 100 : null,
+      amount: baseTotal,
+    });
+  } else {
+    const pricedSum = items.reduce((s, it) => s + (it.amount ?? 0), 0);
+    const hasUnpriced = items.some((it) => it.amount === null);
+
+    if (hasUnpriced) {
+      if (pricedSum === 0) {
+        items.push({
+          label: `${order.serviceName || 'Service'} (Package Total)`,
+          qty: order.qty ?? null,
+          rate: null,
+          amount: baseTotal,
+        });
+      } else {
+        const diff = Math.round((baseTotal - pricedSum) * 100) / 100;
+        if (diff > 0) {
+          const uncovered = selectedServices.filter(
+            (s) => !coveredServiceKeys.has(s.toLowerCase())
+          );
+          items.push({
+            label: uncovered.length > 0 ? uncovered.join(' + ') : 'Remaining Service Items',
+            qty: null,
+            rate: null,
+            amount: diff,
+          });
+        } else if (diff < 0) {
+          adjustment = diff;
+          adjustmentLabel = lessFromNotes > 0 ? 'Less / Discount' : 'Package Adjustment';
+        }
+      }
+    } else {
+      const diff = Math.round((baseTotal - pricedSum) * 100) / 100;
+      if (diff > 0) {
+        const uncovered = selectedServices.filter(
+          (s) => !coveredServiceKeys.has(s.toLowerCase())
+        );
+        if (uncovered.length > 0) {
+          items.push({
+            label: uncovered.join(' + '),
+            qty: 1,
+            rate: diff,
+            amount: diff,
+          });
+        } else {
+          adjustment = diff;
+          adjustmentLabel = 'Additional Service Charge';
+        }
+      } else if (diff < 0) {
+        adjustment = diff;
+        adjustmentLabel = lessFromNotes > 0 ? 'Less / Discount' : 'Package Discount / Adjustment';
+      }
+    }
+  }
+
+  return { items, adjustment, adjustmentLabel, extraNotes };
+}
+
 export const InvoiceModal: React.FC<InvoiceModalProps> = ({
   order,
   onClose,
@@ -100,7 +369,6 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
   const [invoiceDate, setInvoiceDate] = useState('');
   const [paymentMode, setPaymentMode] = useState<'Cash' | 'UPI / Online' | 'Pending'>('Cash');
   const [discount, setDiscount] = useState('0');
-  const [digitalSign, setDigitalSign] = useState(true);
 
   useEffect(() => {
     if (!order) return;
@@ -108,7 +376,6 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
     setInvoiceDate(order.bookingDate || new Date().toISOString().slice(0, 10));
     setPaymentMode(order.status === 'completed' || order.paymentStatus === 'clear' ? 'Cash' : 'Pending');
     setDiscount('0');
-    setDigitalSign(true);
   }, [order]);
 
   const totals = useMemo(() => {
@@ -121,6 +388,11 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
     const grandTotal = Math.max(0, subtotal - disc);
     return { base, extra, subtotal, disc, grandTotal };
   }, [order, discount]);
+
+  const breakdown = useMemo(
+    () => (order ? parseInvoiceBreakdown(order) : { items: [], adjustment: 0, adjustmentLabel: '', extraNotes: [] }),
+    [order]
+  );
 
   if (!order) return null;
 
@@ -243,11 +515,19 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
     drawStaffRow('Cleaning Expert Name', cleanerName);
     y += 18;
 
-    // Service & Bill Summary Table
+    // Service & Itemized Bill Summary Table
+    const pageH = doc.internal.pageSize.getHeight();
+    const ensurePageSpace = (needed: number) => {
+      if (y + needed > pageH - 50) {
+        doc.addPage();
+        y = 48;
+      }
+    };
+
     const cSno = margin;
-    const cDesc = margin + 42;
-    const cCity = margin + 275;
-    const cQty = margin + 375;
+    const cDesc = margin + 36;
+    const cQty = margin + 280;
+    const cRate = margin + 355;
     const cAmt = pageW - margin;
 
     doc.setFillColor(239, 244, 241);
@@ -255,56 +535,113 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9.5);
     doc.setTextColor(15, 23, 42);
-    doc.text('S.No', cSno + 8, y + 14);
-    doc.text('Service Description', cDesc + 8, y + 14);
-    doc.text('City', cCity + 8, y + 14);
-    doc.text('Qty', cQty + 28, y + 14, { align: 'right' });
+    doc.text('S.No', cSno + 6, y + 14);
+    doc.text('Item / Service Description', cDesc + 6, y + 14);
+    doc.text('Qty', cQty + 34, y + 14, { align: 'right' });
+    doc.text('Rate (Rs.)', cRate + 68, y + 14, { align: 'right' });
     doc.text('Amount (Rs.)', cAmt - 8, y + 14, { align: 'right' });
     y += 22;
 
-    const svcLines = doc.splitTextToSize(
-      order.notes ? `${order.serviceName} (${order.notes})` : order.serviceName,
-      220
-    );
-    const row1H = Math.max(24, svcLines.length * 13 + 10);
-    doc.rect(margin, y, contentW, row1H, 'D');
-    doc.setFont('helvetica', 'normal');
-    doc.text('1', cSno + 8, y + 15);
-    doc.setFont('helvetica', 'bold');
-    doc.text(svcLines, cDesc + 8, y + 15);
-    doc.setFont('helvetica', 'normal');
-    doc.text(order.city || '-', cCity + 8, y + 15);
-    doc.text(String(order.qty ?? 1), cQty + 28, y + 15, { align: 'right' });
-    doc.text(`Rs. ${totals.base.toLocaleString('en-IN')}`, cAmt - 8, y + 15, { align: 'right' });
-    y += row1H;
+    let itemSerial = 1;
+    for (const item of breakdown.items) {
+      const descLines = doc.splitTextToSize(item.label, cQty - cDesc - 10);
+      const rowH = Math.max(22, descLines.length * 13 + 9);
+      ensurePageSpace(rowH + 30);
+      doc.rect(margin, y, contentW, rowH, 'D');
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text(String(itemSerial), cSno + 8, y + 15);
+      doc.setFont('helvetica', 'bold');
+      doc.text(descLines, cDesc + 6, y + 15);
+      doc.setFont('helvetica', 'normal');
+      doc.text(item.qty !== null ? String(item.qty) : '-', cQty + 34, y + 15, {
+        align: 'right',
+      });
+      doc.text(
+        item.rate !== null ? `Rs. ${item.rate.toLocaleString('en-IN')}` : '-',
+        cRate + 68,
+        y + 15,
+        { align: 'right' }
+      );
+      doc.setFont('helvetica', 'bold');
+      doc.text(
+        item.amount !== null ? `Rs. ${item.amount.toLocaleString('en-IN')}` : '-',
+        cAmt - 8,
+        y + 15,
+        { align: 'right' }
+      );
+      y += rowH;
+      itemSerial += 1;
+    }
 
     if (totals.extra > 0) {
+      ensurePageSpace(52);
       doc.rect(margin, y, contentW, 22, 'D');
-      doc.text('2', cSno + 8, y + 15);
-      doc.text('Extra / Additional On-Site Cleaning Work', cDesc + 8, y + 15);
-      doc.text(`Rs. ${totals.extra.toLocaleString('en-IN')}`, cAmt - 8, y + 15, { align: 'right' });
+      doc.setFont('helvetica', 'normal');
+      doc.text(String(itemSerial), cSno + 8, y + 15);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Extra / Additional On-Site Work', cDesc + 6, y + 15);
+      doc.setFont('helvetica', 'normal');
+      doc.text('1', cQty + 34, y + 15, { align: 'right' });
+      doc.text(`Rs. ${totals.extra.toLocaleString('en-IN')}`, cRate + 68, y + 15, {
+        align: 'right',
+      });
+      doc.setFont('helvetica', 'bold');
+      doc.text(`Rs. ${totals.extra.toLocaleString('en-IN')}`, cAmt - 8, y + 15, {
+        align: 'right',
+      });
+      y += 22;
+    }
+
+    if (breakdown.adjustment !== 0) {
+      ensurePageSpace(52);
+      doc.rect(margin, y, contentW, 22, 'D');
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(breakdown.adjustment < 0 ? 185 : 15, breakdown.adjustment < 0 ? 28 : 23, breakdown.adjustment < 0 ? 28 : 42);
+      doc.text(breakdown.adjustmentLabel, cRate + 68, y + 15, { align: 'right' });
+      const adjText =
+        breakdown.adjustment < 0
+          ? `-Rs. ${Math.abs(breakdown.adjustment).toLocaleString('en-IN')}`
+          : `Rs. ${breakdown.adjustment.toLocaleString('en-IN')}`;
+      doc.text(adjText, cAmt - 8, y + 15, { align: 'right' });
+      doc.setTextColor(15, 23, 42);
       y += 22;
     }
 
     if (totals.disc > 0) {
+      ensurePageSpace(52);
       doc.rect(margin, y, contentW, 22, 'D');
-      doc.text('Discount', cQty + 28, y + 15, { align: 'right' });
+      doc.setFont('helvetica', 'normal');
+      doc.text('Discount', cRate + 68, y + 15, { align: 'right' });
       doc.text(`-Rs. ${totals.disc.toLocaleString('en-IN')}`, cAmt - 8, y + 15, { align: 'right' });
       y += 22;
     }
 
+    ensurePageSpace(70);
     doc.setFillColor(239, 244, 241);
     doc.rect(margin, y, contentW, 26, 'FD');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
     doc.setTextColor(7, 94, 84);
-    doc.text('Total Bill', cQty + 28, y + 17, { align: 'right' });
+    doc.text('Total Bill', cRate + 68, y + 17, { align: 'right' });
     doc.text(`Rs. ${totals.grandTotal.toLocaleString('en-IN')}`, cAmt - 8, y + 17, {
       align: 'right',
     });
-    y += 40;
+    y += 38;
+
+    if (breakdown.extraNotes.length > 0) {
+      ensurePageSpace(30);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(71, 85, 105);
+      const noteLines = doc.splitTextToSize(`Note: ${breakdown.extraNotes.join(' | ')}`, contentW);
+      doc.text(noteLines, margin, y);
+      y += noteLines.length * 13 + 8;
+    }
 
     // Amount in Words
+    ensurePageSpace(110);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9.5);
     doc.setTextColor(51, 65, 85);
@@ -312,15 +649,9 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
     doc.text(wordsLines, margin, y);
     y += wordsLines.length * 14 + 44;
 
-    // Signatures
+    // Signatures (blank signature fields)
     const leftSigX = margin + 95;
     const rightSigX = pageW - margin - 95;
-    if (digitalSign) {
-      doc.setFont('times', 'italic');
-      doc.setFontSize(16);
-      doc.setTextColor(7, 94, 84);
-      doc.text(cleanerName, rightSigX, y - 10, { align: 'center' });
-    }
     doc.setDrawColor(100, 116, 139);
     doc.setLineWidth(0.8);
     doc.line(margin + 10, y, margin + 180, y);
@@ -459,16 +790,6 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
               className="w-20 px-2 py-1 font-mono-num bg-white border border-[#DCE4E0] rounded focus:outline-none focus:border-[#128C7E]"
             />
           </div>
-
-          <label className="inline-flex items-center gap-1.5 text-slate-700 font-medium cursor-pointer ml-auto">
-            <input
-              type="checkbox"
-              checked={digitalSign}
-              onChange={(e) => setDigitalSign(e.target.checked)}
-              className="accent-[#075E54]"
-            />
-            <span>Auto Cleaner Signature</span>
-          </label>
         </div>
 
         {/* Printable Company Invoice Sheet */}
@@ -579,53 +900,86 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
               </table>
             </div>
 
-            {/* Client Service & Total Bill Table */}
+            {/* Client Service & Itemized Total Bill Table */}
             <div className="mb-4">
               <div className="text-xs font-display font-bold text-slate-900 mb-1.5">
-                Service &amp; Bill Details
+                Service &amp; Itemized Bill Details
               </div>
               <table className="w-full border-collapse text-xs">
                 <thead>
                   <tr className="bg-[#075E54] text-white">
                     <th className="border border-[#075E54] py-2 px-2.5 text-left w-12">S.No</th>
                     <th className="border border-[#075E54] py-2 px-3 text-left">
-                      Service Description
+                      Item / Service Description
                     </th>
-                    <th className="border border-[#075E54] py-2 px-3 text-left">City</th>
                     <th className="border border-[#075E54] py-2 px-2.5 text-right w-14">Qty</th>
+                    <th className="border border-[#075E54] py-2 px-3 text-right w-24">
+                      Rate (₹)
+                    </th>
                     <th className="border border-[#075E54] py-2 px-3 text-right w-28">
                       Amount (₹)
                     </th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr>
-                    <td className="border border-slate-300 py-2.5 px-2.5 font-mono-num">1</td>
-                    <td className="border border-slate-300 py-2.5 px-3">
-                      <div className="font-bold text-slate-900">{order.serviceName}</div>
-                      {order.notes && (
-                        <div className="text-[11px] text-slate-600 mt-0.5">{order.notes}</div>
-                      )}
-                    </td>
-                    <td className="border border-slate-300 py-2.5 px-3 text-slate-800">
-                      {order.city}
-                    </td>
-                    <td className="border border-slate-300 py-2.5 px-2.5 text-right font-mono-num">
-                      {order.qty ?? 1}
-                    </td>
-                    <td className="border border-slate-300 py-2.5 px-3 text-right font-mono-num font-semibold text-slate-900">
-                      ₹{totals.base.toLocaleString('en-IN')}
-                    </td>
-                  </tr>
+                  {breakdown.items.map((item, idx) => (
+                    <tr key={`${item.label}-${idx}`}>
+                      <td className="border border-slate-300 py-2 px-2.5 font-mono-num">
+                        {idx + 1}
+                      </td>
+                      <td className="border border-slate-300 py-2 px-3 font-semibold text-slate-900">
+                        {item.label}
+                      </td>
+                      <td className="border border-slate-300 py-2 px-2.5 text-right font-mono-num text-slate-800">
+                        {item.qty !== null ? item.qty : '—'}
+                      </td>
+                      <td className="border border-slate-300 py-2 px-3 text-right font-mono-num text-slate-700">
+                        {item.rate !== null ? `₹${item.rate.toLocaleString('en-IN')}` : '—'}
+                      </td>
+                      <td className="border border-slate-300 py-2 px-3 text-right font-mono-num font-semibold text-slate-900">
+                        {item.amount !== null ? `₹${item.amount.toLocaleString('en-IN')}` : '—'}
+                      </td>
+                    </tr>
+                  ))}
 
                   {totals.extra > 0 && (
                     <tr>
-                      <td className="border border-slate-300 py-2 px-2.5 font-mono-num">2</td>
-                      <td className="border border-slate-300 py-2 px-3 text-slate-800" colSpan={3}>
+                      <td className="border border-slate-300 py-2 px-2.5 font-mono-num">
+                        {breakdown.items.length + 1}
+                      </td>
+                      <td className="border border-slate-300 py-2 px-3 font-semibold text-slate-900">
                         Extra / Additional On-Site Work
+                      </td>
+                      <td className="border border-slate-300 py-2 px-2.5 text-right font-mono-num text-slate-800">
+                        1
+                      </td>
+                      <td className="border border-slate-300 py-2 px-3 text-right font-mono-num text-slate-700">
+                        ₹{totals.extra.toLocaleString('en-IN')}
                       </td>
                       <td className="border border-slate-300 py-2 px-3 text-right font-mono-num font-semibold text-slate-900">
                         ₹{totals.extra.toLocaleString('en-IN')}
+                      </td>
+                    </tr>
+                  )}
+
+                  {breakdown.adjustment !== 0 && (
+                    <tr>
+                      <td
+                        className={`border border-slate-300 py-1.5 px-3 text-right ${
+                          breakdown.adjustment < 0 ? 'text-red-700' : 'text-slate-700'
+                        }`}
+                        colSpan={4}
+                      >
+                        {breakdown.adjustmentLabel}
+                      </td>
+                      <td
+                        className={`border border-slate-300 py-1.5 px-3 text-right font-mono-num font-semibold ${
+                          breakdown.adjustment < 0 ? 'text-red-700' : 'text-slate-900'
+                        }`}
+                      >
+                        {breakdown.adjustment < 0
+                          ? `-₹${Math.abs(breakdown.adjustment).toLocaleString('en-IN')}`
+                          : `₹${breakdown.adjustment.toLocaleString('en-IN')}`}
                       </td>
                     </tr>
                   )}
@@ -659,6 +1013,13 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
               </table>
             </div>
 
+            {breakdown.extraNotes.length > 0 && (
+              <div className="text-xs text-slate-600 mb-2">
+                <span className="font-semibold text-slate-800">Note:</span>{' '}
+                {breakdown.extraNotes.join(' | ')}
+              </div>
+            )}
+
             <div className="text-xs text-slate-700 mb-8">
               <span className="font-semibold text-slate-900">Amount in Words:</span> {totalWords}
             </div>
@@ -674,13 +1035,7 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
               </div>
 
               <div className="text-center max-w-[240px] ml-auto w-full">
-                <div className="h-9 flex items-end justify-center pb-1">
-                  {digitalSign && (
-                    <span className="font-signature text-2xl text-[#075E54] leading-none select-none">
-                      {cleanerName}
-                    </span>
-                  )}
-                </div>
+                <div className="h-9" />
                 <div className="border-t border-slate-500 pt-1.5 text-xs font-bold text-slate-900">
                   Signature by Cleaner
                 </div>

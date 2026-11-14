@@ -1069,6 +1069,55 @@ if ($method === 'POST' && $uriPath === '/api/orders/transfer') {
   ]);
 }
 
+if ($method === 'POST' && $uriPath === '/api/orders/untransfer') {
+  $user = requireAuth($db);
+  $ids = is_array($body['ids'] ?? null) ? array_values(array_filter(array_map('strval', $body['ids']))) : [];
+  if (empty($ids)) jsonResponse(['error' => 'No order IDs provided'], 400);
+
+  $idSet = array_flip($ids);
+  $now = gmdate('c');
+  $updatedOrders = [];
+  $unauthorizedCount = 0;
+
+  $usersById = [];
+  foreach ($db['users'] as $u) {
+    if (!empty($u['id'])) $usersById[$u['id']] = $u;
+  }
+
+  foreach ($db['orders'] as $i => $o) {
+    if (!isset($idSet[$o['id']])) continue;
+    $fromId = (string)($o['transferredFromId'] ?? '');
+    if ($fromId === '') continue;
+    if (($user['role'] ?? '') !== 'super_admin' && $fromId !== ($user['id'] ?? '')) {
+      $unauthorizedCount++;
+      continue;
+    }
+
+    $origUser = $usersById[$fromId] ?? null;
+    $db['orders'][$i]['createdById'] = $origUser['id'] ?? $fromId;
+    $db['orders'][$i]['createdByName'] = $origUser['name'] ?? ($o['transferredFromName'] ?? ($user['name'] ?? ''));
+    unset($db['orders'][$i]['transferredFromId']);
+    unset($db['orders'][$i]['transferredFromName']);
+    unset($db['orders'][$i]['transferredAt']);
+    $db['orders'][$i]['updatedAt'] = $now;
+    $updatedOrders[] = $db['orders'][$i];
+  }
+
+  if (empty($updatedOrders)) {
+    jsonResponse([
+      'error' => $unauthorizedCount > 0
+        ? 'Not authorized to unsend one or more selected orders'
+        : 'No transferred orders found to unsend',
+    ], $unauthorizedCount > 0 ? 403 : 400);
+  }
+
+  saveDb($db);
+  jsonResponse([
+    'ok' => true,
+    'orders' => $updatedOrders,
+  ]);
+}
+
 if ($method === 'POST' && $uriPath === '/api/orders/bulk-import') {
   $user = requireAuth($db);
   $rows = is_array($body['rows'] ?? null) ? $body['rows'] : [];

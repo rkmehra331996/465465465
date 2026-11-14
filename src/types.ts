@@ -21,15 +21,38 @@ export const SERVICE_OPTIONS = [
   'Bathroom',
 ] as const;
 
+export const DEFAULT_SERVICE_PRICES: Record<string, number> = {
+  bathroom: 600,
+  chimney: 1200,
+  kitchen: 1500,
+};
+
+export function getDefaultServicePrice(serviceName: string): number {
+  return DEFAULT_SERVICE_PRICES[serviceName.trim().toLowerCase()] ?? 0;
+}
+
 export const DRY_CLEAN_ITEMS = [
-  { key: 'Sofa Seat', label: 'Sofa Seat' },
-  { key: 'Cushion', label: 'Cushion' },
-  { key: 'Dining Chair', label: 'Dining Chair' },
-  { key: 'Sofa Cum Bed', label: 'Sofa Cum Bed' },
-  { key: 'Mattress', label: 'Mattress' },
-  { key: 'Puffy', label: 'Puffy' },
-  { key: 'Table', label: 'Table' },
-  { key: 'Chair', label: 'Chair' },
+  { key: 'Sofa Seat', label: 'Sofa Seat', defaultPrice: 150 },
+  { key: 'Cushion', label: 'Cushion', defaultPrice: 30 },
+  { key: 'Dining Chair', label: 'Dining Chair', defaultPrice: 130 },
+  { key: 'Sofa Cum Bed', label: 'Sofa Cum Bed', defaultPrice: 250 },
+  { key: 'Mattress', label: 'Mattress', defaultPrice: 400 },
+  { key: 'Puffy', label: 'Puffy', defaultPrice: 100 },
+  { key: 'Table', label: 'Table', defaultPrice: 120 },
+  { key: 'Chair', label: 'Chair', defaultPrice: 100 },
+] as const;
+
+export const HOME_CLEANING_ITEMS = [
+  { key: 'Room', label: 'Room' },
+  { key: 'Lobby', label: 'Lobby' },
+  { key: 'Hall', label: 'Hall' },
+  { key: 'Kitchen', label: 'Kitchen' },
+  { key: 'Chimney', label: 'Chimney' },
+  { key: 'Bathroom', label: 'Bathroom' },
+  { key: 'Sofa', label: 'Sofa' },
+  { key: 'Storeroom', label: 'Storeroom' },
+  { key: 'Balcony', label: 'Balcony' },
+  { key: 'Other', label: 'Other' },
 ] as const;
 
 export interface CleanerProfile {

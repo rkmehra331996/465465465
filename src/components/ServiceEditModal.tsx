@@ -1,14 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Plus, X } from 'lucide-react';
-import { DRY_CLEAN_ITEMS, type Order } from '../types';
+import {
+  DRY_CLEAN_ITEMS,
+  HOME_CLEANING_ITEMS,
+  getDefaultServicePrice,
+  type Order,
+} from '../types';
 
-const TANK_TYPES = [
-  { key: '500L', label: '500 Ltr' },
-  { key: '750L', label: '750 Ltr' },
-  { key: '1000L', label: '1000 Ltr' },
-  { key: '1500L', label: '1500 Ltr' },
-  { key: '2000L', label: '2000 Ltr' },
-  { key: 'Cement Tank', label: 'Cement Tank' },
+export const TANK_TYPES = [
+  { key: '500L', label: '500 Ltr', defaultPrice: 500 },
+  { key: '750L', label: '750 Ltr', defaultPrice: 550 },
+  { key: '1000L', label: '1000 Ltr', defaultPrice: 600 },
+  { key: '1500L', label: '1500 Ltr', defaultPrice: 700 },
+  { key: '2000L', label: '2000 Ltr', defaultPrice: 800 },
+  { key: 'Cement Tank', label: 'Cement Tank', defaultPrice: 0 },
 ] as const;
 
 interface ServiceEditModalProps {
@@ -21,7 +26,7 @@ interface ServiceEditModalProps {
   ) => Promise<void>;
 }
 
-function parseOrderServiceState(order: Order, availableServices: string[]) {
+export function parseOrderServiceState(order: Order, availableServices: string[]) {
   const rawList = (order.serviceName || '')
     .split('+')
     .map((s) => s.trim())
@@ -38,6 +43,8 @@ function parseOrderServiceState(order: Order, availableServices: string[]) {
   const tankPrices: Record<string, number> = {};
   const dryCleanCounts: Record<string, number> = {};
   const dryCleanPrices: Record<string, number> = {};
+  const homeCleaningCounts: Record<string, number> = {};
+  const homeCleaningPrices: Record<string, number> = {};
   const serviceQuantities: Record<string, number> = {};
   const servicePrices: Record<string, number> = {};
   const extraNoteParts: string[] = [];
@@ -116,6 +123,37 @@ function parseOrderServiceState(order: Order, availableServices: string[]) {
       continue;
     }
 
+    let matchedHomeCleaningSeg = parts.length > 0;
+    const tempHomeCleaning: Record<string, number> = {};
+    const tempHomeCleaningPrices: Record<string, number> = {};
+    for (const part of parts) {
+      const hcMatch =
+        /^(?:Home Cleaning:\s*)?(.+?)\s*[×x*]\s*(\d+)(?:\s*@\s*₹?\s*(\d+(?:\.\d+)?))?$/i.exec(
+          part
+        );
+      if (!hcMatch) {
+        matchedHomeCleaningSeg = false;
+        break;
+      }
+      const hcDef = HOME_CLEANING_ITEMS.find(
+        (item) => item.label.toLowerCase() === hcMatch[1].trim().toLowerCase()
+      );
+      if (!hcDef) {
+        matchedHomeCleaningSeg = false;
+        break;
+      }
+      const cnt = Number(hcMatch[2]);
+      const rate = hcMatch[3] ? Math.round(Number(hcMatch[3])) : 0;
+      if (cnt > 0) tempHomeCleaning[hcDef.key] = cnt;
+      if (rate > 0) tempHomeCleaningPrices[hcDef.key] = rate;
+    }
+
+    if (matchedHomeCleaningSeg) {
+      Object.assign(homeCleaningCounts, tempHomeCleaning);
+      Object.assign(homeCleaningPrices, tempHomeCleaningPrices);
+      continue;
+    }
+
     let matchedServiceSeg = parts.length > 0;
     const tempServiceQty: Record<string, number> = {};
     const tempServicePrices: Record<string, number> = {};
@@ -156,13 +194,15 @@ function parseOrderServiceState(order: Order, availableServices: string[]) {
     extraNoteParts.push(seg);
   }
 
-  const nonTankNonDryCleanSelected = uniqueServices.filter(
-    (s) => s.toLowerCase() !== 'water tank' && s.toLowerCase() !== 'dry clean'
-  );
+  const nonTankNonDryCleanSelected = uniqueServices.filter((s) => {
+    const lower = s.toLowerCase();
+    return lower !== 'water tank' && lower !== 'dry clean' && lower !== 'home cleaning';
+  });
   if (
     Object.keys(serviceQuantities).length === 0 &&
     Object.keys(tankCounts).length === 0 &&
     Object.keys(dryCleanCounts).length === 0 &&
+    Object.keys(homeCleaningCounts).length === 0 &&
     nonTankNonDryCleanSelected.length === 1 &&
     order.qty &&
     order.qty > 0
@@ -177,6 +217,10 @@ function parseOrderServiceState(order: Order, availableServices: string[]) {
   for (const item of DRY_CLEAN_ITEMS) {
     parsedAutoTotal += (dryCleanCounts[item.key] || 0) * (dryCleanPrices[item.key] || 0);
   }
+  for (const item of HOME_CLEANING_ITEMS) {
+    parsedAutoTotal +=
+      (homeCleaningCounts[item.key] || 0) * (homeCleaningPrices[item.key] || 0);
+  }
   for (const s of nonTankNonDryCleanSelected) {
     parsedAutoTotal += (serviceQuantities[s] || 0) * (servicePrices[s] || 0);
   }
@@ -187,6 +231,8 @@ function parseOrderServiceState(order: Order, availableServices: string[]) {
     tankPrices,
     dryCleanCounts,
     dryCleanPrices,
+    homeCleaningCounts,
+    homeCleaningPrices,
     serviceQuantities,
     servicePrices,
     parsedAutoTotal,
@@ -206,6 +252,8 @@ export const ServiceEditModal: React.FC<ServiceEditModalProps> = ({
   const [tankPrices, setTankPrices] = useState<Record<string, number>>({});
   const [dryCleanCounts, setDryCleanCounts] = useState<Record<string, number>>({});
   const [dryCleanPrices, setDryCleanPrices] = useState<Record<string, number>>({});
+  const [homeCleaningCounts, setHomeCleaningCounts] = useState<Record<string, number>>({});
+  const [homeCleaningPrices, setHomeCleaningPrices] = useState<Record<string, number>>({});
   const [serviceQuantities, setServiceQuantities] = useState<Record<string, number>>({});
   const [servicePrices, setServicePrices] = useState<Record<string, number>>({});
   const [priceInput, setPriceInput] = useState('');
@@ -232,6 +280,8 @@ export const ServiceEditModal: React.FC<ServiceEditModalProps> = ({
     setTankPrices(parsed.tankPrices);
     setDryCleanCounts(parsed.dryCleanCounts);
     setDryCleanPrices(parsed.dryCleanPrices);
+    setHomeCleaningCounts(parsed.homeCleaningCounts);
+    setHomeCleaningPrices(parsed.homeCleaningPrices);
     setServiceQuantities(parsed.serviceQuantities);
     setServicePrices(parsed.servicePrices);
     setExtraNote(parsed.extraNote);
@@ -250,11 +300,15 @@ export const ServiceEditModal: React.FC<ServiceEditModalProps> = ({
   const hasDryCleanSelected = selectedServices.some(
     (s) => s.toLowerCase() === 'dry clean'
   );
+  const hasHomeCleaningSelected = selectedServices.some(
+    (s) => s.toLowerCase() === 'home cleaning'
+  );
   const selectedNonTankServices = useMemo(
     () =>
-      selectedServices.filter(
-        (s) => s.toLowerCase() !== 'water tank' && s.toLowerCase() !== 'dry clean'
-      ),
+      selectedServices.filter((s) => {
+        const lower = s.toLowerCase();
+        return lower !== 'water tank' && lower !== 'dry clean' && lower !== 'home cleaning';
+      }),
     [selectedServices]
   );
 
@@ -290,6 +344,22 @@ export const ServiceEditModal: React.FC<ServiceEditModalProps> = ({
     return { text: parts.join(', '), totalItems, totalPrice };
   }, [dryCleanCounts, dryCleanPrices]);
 
+  const homeCleaningSummary = useMemo(() => {
+    const parts: string[] = [];
+    let totalItems = 0;
+    let totalPrice = 0;
+    for (const item of HOME_CLEANING_ITEMS) {
+      const cnt = homeCleaningCounts[item.key] || 0;
+      const rate = homeCleaningPrices[item.key] || 0;
+      if (cnt > 0) {
+        parts.push(rate > 0 ? `${item.label} × ${cnt} @ ₹${rate}` : `${item.label} × ${cnt}`);
+        totalItems += cnt;
+        if (rate > 0) totalPrice += cnt * rate;
+      }
+    }
+    return { text: parts.join(', '), totalItems, totalPrice };
+  }, [homeCleaningCounts, homeCleaningPrices]);
+
   const serviceQtySummary = useMemo(() => {
     const parts: string[] = [];
     let totalQty = 0;
@@ -315,13 +385,16 @@ export const ServiceEditModal: React.FC<ServiceEditModalProps> = ({
     return (
       (hasWaterTankSelected ? tankSummary.totalPrice : 0) +
       (hasDryCleanSelected ? dryCleanSummary.totalPrice : 0) +
+      (hasHomeCleaningSelected ? homeCleaningSummary.totalPrice : 0) +
       serviceQtySummary.totalPrice
     );
   }, [
     hasWaterTankSelected,
     hasDryCleanSelected,
+    hasHomeCleaningSelected,
     tankSummary.totalPrice,
     dryCleanSummary.totalPrice,
+    homeCleaningSummary.totalPrice,
     serviceQtySummary.totalPrice,
   ]);
 
@@ -343,6 +416,9 @@ export const ServiceEditModal: React.FC<ServiceEditModalProps> = ({
         } else if (service.toLowerCase() === 'dry clean') {
           setDryCleanCounts({});
           setDryCleanPrices({});
+        } else if (service.toLowerCase() === 'home cleaning') {
+          setHomeCleaningCounts({});
+          setHomeCleaningPrices({});
         } else {
           setServiceQuantities((qPrev) => {
             const copy = { ...qPrev };
@@ -365,34 +441,53 @@ export const ServiceEditModal: React.FC<ServiceEditModalProps> = ({
   const setTankCountDirect = (key: string, rawVal: string) => {
     const digits = rawVal.replace(/\D/g, '');
     const num = digits ? Math.max(0, Math.min(999, Number(digits))) : 0;
-    setTankCounts((prev) => {
-      if (num === 0) {
+    const prevCount = tankCounts[key] || 0;
+    const tankDef = TANK_TYPES.find((t) => t.key === key);
+
+    if (num === 0) {
+      setTankCounts((prev) => {
+        if (!(key in prev)) return prev;
         const copy = { ...prev };
         delete copy[key];
-        setTankPrices((pPrev) => {
-          if (!(key in pPrev)) return pPrev;
-          const pCopy = { ...pPrev };
-          delete pCopy[key];
-          return pCopy;
-        });
         return copy;
-      }
-      return { ...prev, [key]: num };
-    });
+      });
+      setTankPrices((pPrev) => {
+        if (!(key in pPrev)) return pPrev;
+        const pCopy = { ...pPrev };
+        delete pCopy[key];
+        return pCopy;
+      });
+      return;
+    }
+
+    setTankCounts((prev) => ({ ...prev, [key]: num }));
+    if (prevCount === 0 && tankDef && tankDef.defaultPrice > 0) {
+      setTankPrices((pPrev) =>
+        pPrev[key] === undefined ? { ...pPrev, [key]: tankDef.defaultPrice } : pPrev
+      );
+    }
   };
 
   const setTankPriceDirect = (key: string, rawVal: string) => {
     const digits = rawVal.replace(/\D/g, '');
     const num = digits ? Math.max(0, Math.min(999999, Number(digits))) : 0;
-    setTankPrices((prev) => {
-      if (num === 0) {
+    const count = tankCounts[key] || 0;
+
+    if (num === 0) {
+      setTankPrices((prev) => {
+        if (count > 0) {
+          return { ...prev, [key]: 0 };
+        }
+        if (!(key in prev)) return prev;
         const copy = { ...prev };
         delete copy[key];
         return copy;
-      }
-      return { ...prev, [key]: num };
-    });
-    if (num > 0) {
+      });
+      return;
+    }
+
+    setTankPrices((prev) => ({ ...prev, [key]: num }));
+    if (count === 0) {
       setTankCounts((prev) => ((prev[key] || 0) === 0 ? { ...prev, [key]: 1 } : prev));
     }
   };
@@ -400,69 +495,152 @@ export const ServiceEditModal: React.FC<ServiceEditModalProps> = ({
   const setDryCleanCountDirect = (key: string, rawVal: string) => {
     const digits = rawVal.replace(/\D/g, '');
     const num = digits ? Math.max(0, Math.min(999, Number(digits))) : 0;
-    setDryCleanCounts((prev) => {
-      if (num === 0) {
+    const prevCount = dryCleanCounts[key] || 0;
+    const itemDef = DRY_CLEAN_ITEMS.find((item) => item.key === key);
+
+    if (num === 0) {
+      setDryCleanCounts((prev) => {
+        if (!(key in prev)) return prev;
         const copy = { ...prev };
         delete copy[key];
-        setDryCleanPrices((pPrev) => {
-          if (!(key in pPrev)) return pPrev;
-          const pCopy = { ...pPrev };
-          delete pCopy[key];
-          return pCopy;
-        });
         return copy;
-      }
-      return { ...prev, [key]: num };
-    });
+      });
+      setDryCleanPrices((pPrev) => {
+        if (!(key in pPrev)) return pPrev;
+        const pCopy = { ...pPrev };
+        delete pCopy[key];
+        return pCopy;
+      });
+      return;
+    }
+
+    setDryCleanCounts((prev) => ({ ...prev, [key]: num }));
+    if (prevCount === 0 && itemDef && itemDef.defaultPrice > 0) {
+      setDryCleanPrices((pPrev) =>
+        pPrev[key] === undefined ? { ...pPrev, [key]: itemDef.defaultPrice } : pPrev
+      );
+    }
   };
 
   const setDryCleanPriceDirect = (key: string, rawVal: string) => {
     const digits = rawVal.replace(/\D/g, '');
     const num = digits ? Math.max(0, Math.min(999999, Number(digits))) : 0;
-    setDryCleanPrices((prev) => {
-      if (num === 0) {
+    const count = dryCleanCounts[key] || 0;
+
+    if (num === 0) {
+      setDryCleanPrices((prev) => {
+        if (count > 0) {
+          return { ...prev, [key]: 0 };
+        }
+        if (!(key in prev)) return prev;
         const copy = { ...prev };
         delete copy[key];
         return copy;
-      }
-      return { ...prev, [key]: num };
-    });
-    if (num > 0) {
+      });
+      return;
+    }
+
+    setDryCleanPrices((prev) => ({ ...prev, [key]: num }));
+    if (count === 0) {
       setDryCleanCounts((prev) => ((prev[key] || 0) === 0 ? { ...prev, [key]: 1 } : prev));
+    }
+  };
+
+  const setHomeCleaningCountDirect = (key: string, rawVal: string) => {
+    const digits = rawVal.replace(/\D/g, '');
+    const num = digits ? Math.max(0, Math.min(999, Number(digits))) : 0;
+    if (num === 0) {
+      setHomeCleaningCounts((prev) => {
+        if (!(key in prev)) return prev;
+        const copy = { ...prev };
+        delete copy[key];
+        return copy;
+      });
+      setHomeCleaningPrices((pPrev) => {
+        if (!(key in pPrev)) return pPrev;
+        const pCopy = { ...pPrev };
+        delete pCopy[key];
+        return pCopy;
+      });
+      return;
+    }
+    setHomeCleaningCounts((prev) => ({ ...prev, [key]: num }));
+  };
+
+  const setHomeCleaningPriceDirect = (key: string, rawVal: string) => {
+    const digits = rawVal.replace(/\D/g, '');
+    const num = digits ? Math.max(0, Math.min(999999, Number(digits))) : 0;
+    const count = homeCleaningCounts[key] || 0;
+
+    if (num === 0) {
+      setHomeCleaningPrices((prev) => {
+        if (count > 0) {
+          return { ...prev, [key]: 0 };
+        }
+        if (!(key in prev)) return prev;
+        const copy = { ...prev };
+        delete copy[key];
+        return copy;
+      });
+      return;
+    }
+
+    setHomeCleaningPrices((prev) => ({ ...prev, [key]: num }));
+    if (count === 0) {
+      setHomeCleaningCounts((prev) => ((prev[key] || 0) === 0 ? { ...prev, [key]: 1 } : prev));
     }
   };
 
   const setServiceQtyDirect = (service: string, rawVal: string) => {
     const digits = rawVal.replace(/\D/g, '');
     const num = digits ? Math.max(0, Math.min(999, Number(digits))) : 0;
-    setServiceQuantities((prev) => {
-      if (num === 0) {
+    const prevQty = serviceQuantities[service] || 0;
+    const defaultPrice = getDefaultServicePrice(service);
+
+    if (num === 0) {
+      setServiceQuantities((prev) => {
+        if (!(service in prev)) return prev;
         const copy = { ...prev };
         delete copy[service];
-        setServicePrices((pPrev) => {
-          if (!(service in pPrev)) return pPrev;
-          const pCopy = { ...pPrev };
-          delete pCopy[service];
-          return pCopy;
-        });
         return copy;
-      }
-      return { ...prev, [service]: num };
-    });
+      });
+      setServicePrices((pPrev) => {
+        if (!(service in pPrev)) return pPrev;
+        const pCopy = { ...pPrev };
+        delete pCopy[service];
+        return pCopy;
+      });
+      return;
+    }
+
+    setServiceQuantities((prev) => ({ ...prev, [service]: num }));
+    if (prevQty === 0 && defaultPrice > 0) {
+      setServicePrices((pPrev) =>
+        pPrev[service] === undefined ? { ...pPrev, [service]: defaultPrice } : pPrev
+      );
+    }
   };
 
   const setServicePriceDirect = (service: string, rawVal: string) => {
     const digits = rawVal.replace(/\D/g, '');
     const num = digits ? Math.max(0, Math.min(999999, Number(digits))) : 0;
-    setServicePrices((prev) => {
-      if (num === 0) {
+    const qty = serviceQuantities[service] || 0;
+
+    if (num === 0) {
+      setServicePrices((prev) => {
+        if (qty > 0) {
+          return { ...prev, [service]: 0 };
+        }
+        if (!(service in prev)) return prev;
         const copy = { ...prev };
         delete copy[service];
         return copy;
-      }
-      return { ...prev, [service]: num };
-    });
-    if (num > 0) {
+      });
+      return;
+    }
+
+    setServicePrices((prev) => ({ ...prev, [service]: num }));
+    if (qty === 0) {
       setServiceQuantities((prev) => ((prev[service] || 0) === 0 ? { ...prev, [service]: 1 } : prev));
     }
   };
@@ -479,10 +657,12 @@ export const ServiceEditModal: React.FC<ServiceEditModalProps> = ({
       const totalQty =
         (hasWaterTankSelected ? tankSummary.totalTanks : 0) +
         (hasDryCleanSelected ? dryCleanSummary.totalItems : 0) +
+        (hasHomeCleaningSelected ? homeCleaningSummary.totalItems : 0) +
         serviceQtySummary.totalQty;
       const noteParts = [
         hasWaterTankSelected && tankSummary.text ? tankSummary.text : '',
         hasDryCleanSelected && dryCleanSummary.text ? dryCleanSummary.text : '',
+        hasHomeCleaningSelected && homeCleaningSummary.text ? homeCleaningSummary.text : '',
         serviceQtySummary.text ? serviceQtySummary.text : '',
         lessAmount > 0 ? `Less: ₹${lessAmount}` : '',
         extraNote.trim(),
@@ -633,7 +813,11 @@ export const ServiceEditModal: React.FC<ServiceEditModalProps> = ({
                               inputMode="numeric"
                               value={rate > 0 ? String(rate) : ''}
                               onChange={(e) => setTankPriceDirect(t.key, e.target.value)}
-                              placeholder="Price"
+                              placeholder={
+                                count === 0 && t.defaultPrice > 0
+                                  ? String(t.defaultPrice)
+                                  : 'Price'
+                              }
                               aria-label={`${t.label} manual price`}
                               className="w-14 text-right font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
                             />
@@ -706,6 +890,83 @@ export const ServiceEditModal: React.FC<ServiceEditModalProps> = ({
                               inputMode="numeric"
                               value={rate > 0 ? String(rate) : ''}
                               onChange={(e) => setDryCleanPriceDirect(item.key, e.target.value)}
+                              placeholder={
+                                count === 0 && item.defaultPrice > 0
+                                  ? String(item.defaultPrice)
+                                  : 'Price'
+                              }
+                              aria-label={`${item.label} manual price`}
+                              className="w-14 text-right font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {hasHomeCleaningSelected && (
+            <div>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                <label className="text-xs font-semibold text-slate-700">
+                  Home Cleaning Areas (Qty &amp; Manual Price ₹/unit)
+                </label>
+                {homeCleaningSummary.totalItems > 0 && (
+                  <span className="text-xs text-[#075E54] font-semibold">
+                    {homeCleaningSummary.text}
+                    {homeCleaningSummary.totalPrice > 0
+                      ? ` · ₹${homeCleaningSummary.totalPrice.toLocaleString('en-IN')}`
+                      : ''}
+                  </span>
+                )}
+              </div>
+              <div className="bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg p-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {HOME_CLEANING_ITEMS.map((item) => {
+                    const count = homeCleaningCounts[item.key] || 0;
+                    const rate = homeCleaningPrices[item.key] || 0;
+                    const lineTotal = count * rate;
+                    return (
+                      <div
+                        key={item.key}
+                        className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded border text-xs ${
+                          count > 0 || rate > 0
+                            ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold'
+                            : 'bg-white border-[#DCE4E0] text-slate-700'
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate">{item.label}</div>
+                          {lineTotal > 0 && (
+                            <div className="text-[10px] font-mono-num text-[#128C7E]">
+                              = ₹{lineTotal.toLocaleString('en-IN')}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
+                            <span className="text-[10px] text-slate-400 mr-1">Qty</span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={count > 0 ? String(count) : ''}
+                              onChange={(e) => setHomeCleaningCountDirect(item.key, e.target.value)}
+                              placeholder="0"
+                              aria-label={`${item.label} qty`}
+                              className="w-8 text-center font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
+                            />
+                          </div>
+                          <span className="text-[10px] text-slate-400">×</span>
+                          <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
+                            <span className="text-[10px] text-slate-400 mr-0.5">₹</span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={rate > 0 ? String(rate) : ''}
+                              onChange={(e) => setHomeCleaningPriceDirect(item.key, e.target.value)}
                               placeholder="Price"
                               aria-label={`${item.label} manual price`}
                               className="w-14 text-right font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
@@ -740,6 +1001,7 @@ export const ServiceEditModal: React.FC<ServiceEditModalProps> = ({
                   {selectedNonTankServices.map((s) => {
                     const qtyVal = serviceQuantities[s] || 0;
                     const rate = servicePrices[s] || 0;
+                    const defaultPrice = getDefaultServicePrice(s);
                     const lineTotal = qtyVal * rate;
                     const isSeats = s.toLowerCase() === 'sofa';
                     const unitLabel = isSeats ? `${s} (Seats)` : s;
@@ -783,7 +1045,11 @@ export const ServiceEditModal: React.FC<ServiceEditModalProps> = ({
                               inputMode="numeric"
                               value={rate > 0 ? String(rate) : ''}
                               onChange={(e) => setServicePriceDirect(s, e.target.value)}
-                              placeholder="Price"
+                              placeholder={
+                                qtyVal === 0 && defaultPrice > 0
+                                  ? String(defaultPrice)
+                                  : 'Price'
+                              }
                               aria-label={`${unitLabel} manual price`}
                               className="w-14 text-right font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
                             />

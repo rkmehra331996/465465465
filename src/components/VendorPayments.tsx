@@ -6,8 +6,6 @@ import {
   ChevronRight,
   Clock,
   FileText,
-  MapPin,
-  Phone,
   Plus,
   Search,
   User,
@@ -116,7 +114,6 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
 
   const [vendorSearch, setVendorSearch] = useState('');
   const [invoiceOrder, setInvoiceOrder] = useState<Order | null>(null);
-  const [telecallerFilter, setTelecallerFilter] = useState('all');
 
   // Earning Date-to-Date Filter (defaults to This Month)
   const [earningFrom, setEarningFrom] = useState(initialMonth.from);
@@ -159,25 +156,12 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
     return () => window.removeEventListener('keydown', onKey);
   }, [dayModalOpen]);
 
-  const uniqueTelecallers = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const o of orders) {
-      if (o.createdById && o.createdByName) {
-        map.set(o.createdById, o.createdByName);
-      }
-    }
-    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
-  }, [orders]);
-
-  // Orders scoped by Telecaller (used by calendar so browsing any month always works)
+  // Orders scoped by role (used by calendar so browsing any month always works)
   const telecallerOrders = useMemo(() => {
-    const base =
-      currentUser.role === 'super_admin'
-        ? orders
-        : orders.filter((o) => o.createdById === currentUser.id);
-    if (telecallerFilter === 'all') return base;
-    return base.filter((o) => o.createdById === telecallerFilter);
-  }, [orders, telecallerFilter, currentUser.role, currentUser.id]);
+    return currentUser.role === 'super_admin'
+      ? orders
+      : orders.filter((o) => o.createdById === currentUser.id);
+  }, [orders, currentUser.role, currentUser.id]);
 
   // Orders scoped by Date-to-Date Earning filter (used for Earning Summary & Vendor Cards)
   const rangeOrders = useMemo(() => {
@@ -796,83 +780,56 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
   }, [dayReceivedInput, selectedDayData.totalComm]);
 
   return (
-    <div className="flex flex-col lg:flex-row gap-5 items-start">
-      {/* Left Column: Simple Vendor List (Cleaner Name + Phone + City) */}
-      <aside className="w-full lg:w-[340px] shrink-0 bg-white border border-[#DCE4E0] rounded-xl overflow-hidden">
-        <div className="px-4 py-3 bg-[#075E54] text-white">
-          <div className="flex items-center justify-between">
-            <h2 className="font-display text-sm font-bold">Cleaners / Vendors</h2>
-            <span className="text-[11px] text-white/80 font-mono-num">
-              {vendors.length} vendors
-            </span>
-          </div>
-          <p className="text-[11px] text-emerald-100/85 mt-0.5">
-            Click cleaner → click date box for 30% commission popup
-          </p>
+    <div className="flex flex-col lg:flex-row gap-3 items-start">
+      {/* Left Column: Compact Vendor List */}
+      <aside className="w-full lg:w-[260px] shrink-0 bg-white border border-[#DCE4E0] rounded-lg overflow-hidden">
+        <div className="px-3 py-2 border-b border-[#DCE4E0] flex items-center justify-between">
+          <h2 className="font-display text-xs font-bold text-slate-900 uppercase tracking-wide">
+            Cleaners
+          </h2>
+          <span className="text-[11px] text-slate-500 font-mono-num">{vendors.length}</span>
         </div>
 
-        <div className="p-3 border-b border-[#DCE4E0] space-y-2 bg-[#FAFDFB]">
+        <div className="p-2 border-b border-[#DCE4E0]">
           <div className="relative">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
               value={vendorSearch}
               onChange={(e) => setVendorSearch(e.target.value)}
-              placeholder="Search cleaner, number, city..."
-              className="w-full pl-7 pr-2.5 py-1.5 text-xs bg-white border border-[#DCE4E0] rounded-lg focus:outline-none focus:border-[#128C7E]"
+              placeholder="Search cleaner, phone, city..."
+              className="w-full pl-7 pr-2.5 py-1.5 text-xs bg-[#FAFDFB] border border-[#DCE4E0] rounded focus:bg-white focus:outline-none focus:border-[#128C7E]"
             />
           </div>
-
-          {currentUser.role === 'super_admin' && uniqueTelecallers.length > 0 && (
-            <select
-              aria-label="Filter by telecaller"
-              value={telecallerFilter}
-              onChange={(e) => setTelecallerFilter(e.target.value)}
-              className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#DCE4E0] rounded-lg text-slate-700 focus:outline-none focus:border-[#128C7E]"
-            >
-              <option value="all">All Telecallers</option>
-              {uniqueTelecallers.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          )}
         </div>
 
-        <div className="divide-y divide-[#DCE4E0] max-h-[600px] overflow-y-auto">
-          {/* Pinned Option: All Vendors Together (Ek Sath) */}
+        <div className="divide-y divide-[#DCE4E0] max-h-[560px] overflow-y-auto">
           <button
             type="button"
             onClick={handleSelectAllVendors}
-            className={`w-full text-left px-4 py-3 transition-colors cursor-pointer ${
+            className={`w-full text-left px-3 py-2 transition-colors cursor-pointer ${
               isAllVendorsMode
-                ? 'bg-[#EAF7F0] border-l-4 border-l-[#075E54]'
-                : 'bg-[#FAFDFB] hover:bg-[#F0F7F3]'
+                ? 'bg-[#EAF7F0] text-[#075E54]'
+                : 'bg-white hover:bg-[#FAFDFB] text-slate-900'
             }`}
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="font-display text-sm font-bold text-[#075E54] inline-flex items-center gap-1.5 truncate">
-                <Users className="w-4 h-4 shrink-0" />
-                All Vendors (Ek Sath)
+              <span className="font-display text-xs font-semibold inline-flex items-center gap-1.5 truncate">
+                <Users className="w-3.5 h-3.5 shrink-0 text-[#075E54]" />
+                All Vendors
               </span>
               {allRangeSummary.pendingComm > 0 ? (
-                <span className="px-2 py-0.5 rounded bg-red-50 border border-red-200 text-red-700 text-[11px] font-mono-num font-bold shrink-0">
-                  Baaki: ₹{formatRupee(allRangeSummary.pendingComm)}
+                <span className="text-[11px] font-mono-num font-bold text-red-600 shrink-0">
+                  ₹{formatRupee(allRangeSummary.pendingComm)}
                 </span>
               ) : (
-                <span className="px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-[#075E54] text-[11px] font-semibold shrink-0">
-                  All Clear
-                </span>
+                <span className="text-[11px] font-semibold text-[#075E54] shrink-0">Clear</span>
               )}
-            </div>
-            <div className="text-[11px] text-slate-600 mt-1">
-              Ek date me sabhi vendors ka kaam dekhein
             </div>
           </button>
 
           {filteredVendors.length === 0 ? (
-            <div className="p-6 text-center text-xs text-slate-500">
+            <div className="p-4 text-center text-xs text-slate-500">
               No matching cleaners found.
             </div>
           ) : (
@@ -884,39 +841,34 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                   key={v.name}
                   type="button"
                   onClick={() => handleSelectVendor(v.name)}
-                  className={`w-full text-left px-4 py-3 transition-colors cursor-pointer ${
-                    isSelected
-                      ? 'bg-[#EAF7F0] border-l-4 border-l-[#075E54]'
-                      : 'bg-white hover:bg-[#F7F9F8]'
+                  className={`w-full text-left px-3 py-2 transition-colors cursor-pointer ${
+                    isSelected ? 'bg-[#EAF7F0]' : 'bg-white hover:bg-[#FAFDFB]'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-display text-sm font-bold text-slate-900 truncate">
+                    <span
+                      className={`text-xs font-semibold truncate ${
+                        isSelected ? 'text-[#075E54]' : 'text-slate-900'
+                      }`}
+                    >
                       {v.name}
                     </span>
                     {v.pendingComm > 0 ? (
-                      <span className="px-2 py-0.5 rounded bg-red-50 border border-red-200 text-red-700 text-[11px] font-mono-num font-bold shrink-0">
-                        Baaki: ₹{formatRupee(v.pendingComm)}
+                      <span className="text-[11px] font-mono-num font-bold text-red-600 shrink-0">
+                        ₹{formatRupee(v.pendingComm)}
                       </span>
                     ) : v.rangeOrderCount > 0 ? (
-                      <span className="px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-[#075E54] text-[11px] font-semibold shrink-0">
-                        All Clear
-                      </span>
+                      <span className="text-[11px] font-semibold text-[#075E54] shrink-0">Clear</span>
                     ) : (
-                      <span className="text-[11px] text-slate-400 shrink-0">No Orders</span>
+                      <span className="text-[11px] text-slate-400 shrink-0">—</span>
                     )}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-600 mt-1">
-                    <span className="inline-flex items-center gap-1 font-mono-num">
-                      <Phone className="w-3 h-3 text-slate-400" />
-                      {v.phone || 'No number'}
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <MapPin className="w-3 h-3 text-slate-400" />
-                      {v.city}
-                    </span>
-                  </div>
+                  {(v.city !== '—' || v.phone) && (
+                    <div className="text-[10px] text-slate-500 mt-0.5 truncate font-mono-num">
+                      {[v.city !== '—' ? v.city : '', v.phone].filter(Boolean).join(' · ')}
+                    </div>
+                  )}
                 </button>
               );
             })
@@ -924,20 +876,20 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
         </div>
       </aside>
 
-      {/* Right Column: Single Vendor OR All Vendors (Ek Date Me Kon Kon Kitna Kaam Kiya) */}
-      <div className="flex-1 min-w-0 w-full space-y-4">
-        {/* Top Mode Bar: Switch easily between Single Vendor and All Vendors (Ek Sath) */}
-        <div className="bg-white border border-[#DCE4E0] rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
-          <div className="inline-flex rounded-lg border border-[#DCE4E0] overflow-hidden bg-[#FAFDFB]">
+      {/* Right Column: Compact Minimal Ledger */}
+      <div className="flex-1 min-w-0 w-full space-y-3">
+        {/* Top Switcher & Date Controls */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="inline-flex rounded-lg border border-[#DCE4E0] overflow-hidden bg-white">
             <button
               type="button"
               onClick={() => {
                 if (lastSingleVendor) handleSelectVendor(lastSingleVendor);
               }}
-              className={`px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
+              className={`px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap ${
                 !isAllVendorsMode
                   ? 'bg-[#075E54] text-white'
-                  : 'text-slate-700 hover:bg-slate-100'
+                  : 'text-slate-700 hover:bg-[#FAFDFB]'
               }`}
             >
               <User className="w-3.5 h-3.5" />
@@ -946,212 +898,221 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
             <button
               type="button"
               onClick={handleSelectAllVendors}
-              className={`px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5 border-l border-[#DCE4E0] cursor-pointer transition-colors ${
+              className={`px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5 border-l border-[#DCE4E0] cursor-pointer transition-colors whitespace-nowrap ${
                 isAllVendorsMode
                   ? 'bg-[#075E54] text-white'
-                  : 'text-slate-700 hover:bg-slate-100'
+                  : 'text-slate-700 hover:bg-[#FAFDFB]'
               }`}
             >
               <Users className="w-3.5 h-3.5" />
-              All Vendors (Ek Sath)
+              All Vendors
             </button>
           </div>
 
-          <div className="text-xs text-slate-600">
-            {isAllVendorsMode ? (
-              <span>
-                Showing <strong className="text-slate-900">All Vendors</strong> for{' '}
-                <strong className="text-[#075E54]">{formatReadableDate(selectedDate)}</strong>
-              </span>
-            ) : (
-              <span>
-                Single Vendor:{' '}
-                <strong className="text-slate-900">{activeVendorInfo?.name || '—'}</strong>
-              </span>
-            )}
-          </div>
+          {isAllVendorsMode ? (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <button
+                type="button"
+                onClick={() => handlePickAllVendorsDate(shiftIsoDate(selectedDate, -1))}
+                aria-label="Previous day"
+                className="p-1.5 bg-white hover:bg-[#FAFDFB] border border-[#DCE4E0] rounded cursor-pointer"
+              >
+                <ChevronLeft className="w-3.5 h-3.5 text-slate-700" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handlePickAllVendorsDate(todayStr())}
+                className={`px-2.5 py-1 rounded border cursor-pointer font-medium whitespace-nowrap ${
+                  selectedDate === todayStr()
+                    ? 'bg-[#075E54] text-white border-[#075E54]'
+                    : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#FAFDFB]'
+                }`}
+              >
+                Today
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handlePickAllVendorsDate(shiftIsoDate(todayStr(), -1))}
+                className={`px-2.5 py-1 rounded border cursor-pointer font-medium whitespace-nowrap ${
+                  selectedDate === shiftIsoDate(todayStr(), -1)
+                    ? 'bg-[#075E54] text-white border-[#075E54]'
+                    : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#FAFDFB]'
+                }`}
+              >
+                Yesterday
+              </button>
+
+              <IndianDateInput
+                ariaLabel="Select date for all vendors"
+                title="Select Date (DD/MM/YY)"
+                value={selectedDate === 'NO_DATE' ? '' : selectedDate}
+                onChange={(val) => {
+                  if (val) handlePickAllVendorsDate(val);
+                }}
+                className="min-w-[106px]"
+              />
+
+              <button
+                type="button"
+                onClick={() => handlePickAllVendorsDate(shiftIsoDate(selectedDate, 1))}
+                aria-label="Next day"
+                className="p-1.5 bg-white hover:bg-[#FAFDFB] border border-[#DCE4E0] rounded cursor-pointer"
+              >
+                <ChevronRight className="w-3.5 h-3.5 text-slate-700" />
+              </button>
+            </div>
+          ) : activeVendorInfo ? (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <button
+                type="button"
+                onClick={() => applyEarningPreset('this_month')}
+                className={`px-2.5 py-1 rounded border cursor-pointer font-medium whitespace-nowrap ${
+                  earningFrom === thisMonthRange.from && earningTo === thisMonthRange.to
+                    ? 'bg-[#075E54] text-white border-[#075E54]'
+                    : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#FAFDFB]'
+                }`}
+              >
+                This Month
+              </button>
+              <button
+                type="button"
+                onClick={() => applyEarningPreset('last_month')}
+                className={`px-2.5 py-1 rounded border cursor-pointer font-medium whitespace-nowrap ${
+                  earningFrom === lastMonthRange.from && earningTo === lastMonthRange.to
+                    ? 'bg-[#075E54] text-white border-[#075E54]'
+                    : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#FAFDFB]'
+                }`}
+              >
+                Last Month
+              </button>
+              <button
+                type="button"
+                onClick={() => applyEarningPreset('all')}
+                className={`px-2.5 py-1 rounded border cursor-pointer font-medium whitespace-nowrap ${
+                  !earningFrom && !earningTo
+                    ? 'bg-[#075E54] text-white border-[#075E54]'
+                    : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#FAFDFB]'
+                }`}
+              >
+                All Dates
+              </button>
+
+              <div className="flex items-center gap-1">
+                <IndianDateInput
+                  ariaLabel="Earning from date"
+                  title="From Date (DD/MM/YY)"
+                  value={earningFrom}
+                  onChange={setEarningFrom}
+                  allowClear
+                  className="min-w-[100px]"
+                />
+                <span className="text-slate-400">–</span>
+                <IndianDateInput
+                  ariaLabel="Earning to date"
+                  title="To Date (DD/MM/YY)"
+                  value={earningTo}
+                  onChange={setEarningTo}
+                  allowClear
+                  className="min-w-[100px]"
+                />
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {isAllVendorsMode ? (
           <>
-            {/* All Vendors Date Selector + Selected Date Summary */}
-            <div className="bg-white border border-[#DCE4E0] rounded-xl p-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2.5">
-                <div>
-                  <h2 className="font-display text-base font-bold text-slate-900">
-                    Ek Date Me Sabhi Vendors Ka Kaam — {formatReadableDate(selectedDate)}
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {selectedAllDayData.vendors.length} vendor(s) worked ·{' '}
-                    {selectedAllDayData.orders.length} order(s)
-                  </p>
-                </div>
-
-                {/* Single-Date Picker Controls */}
-                <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => handlePickAllVendorsDate(shiftIsoDate(selectedDate, -1))}
-                    aria-label="Previous day"
-                    className="p-1.5 bg-[#F7F9F8] hover:bg-[#EFF4F1] border border-[#DCE4E0] rounded-lg cursor-pointer"
-                  >
-                    <ChevronLeft className="w-3.5 h-3.5 text-slate-700" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handlePickAllVendorsDate(todayStr())}
-                    className={`px-2.5 py-1 rounded border cursor-pointer font-medium ${
-                      selectedDate === todayStr()
-                        ? 'bg-[#075E54] text-white border-[#075E54]'
-                        : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#F7F9F8]'
-                    }`}
-                  >
-                    Aj (Today)
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handlePickAllVendorsDate(shiftIsoDate(todayStr(), -1))}
-                    className={`px-2.5 py-1 rounded border cursor-pointer font-medium ${
-                      selectedDate === shiftIsoDate(todayStr(), -1)
-                        ? 'bg-[#075E54] text-white border-[#075E54]'
-                        : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#F7F9F8]'
-                    }`}
-                  >
-                    Kal (Yesterday)
-                  </button>
-
-                  <IndianDateInput
-                    ariaLabel="Select date for all vendors"
-                    title="Select Date (DD/MM/YY)"
-                    value={selectedDate === 'NO_DATE' ? '' : selectedDate}
-                    onChange={(val) => {
-                      if (val) handlePickAllVendorsDate(val);
-                    }}
-                    className="min-w-[108px]"
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() => handlePickAllVendorsDate(shiftIsoDate(selectedDate, 1))}
-                    aria-label="Next day"
-                    className="p-1.5 bg-[#F7F9F8] hover:bg-[#EFF4F1] border border-[#DCE4E0] rounded-lg cursor-pointer"
-                  >
-                    <ChevronRight className="w-3.5 h-3.5 text-slate-700" />
-                  </button>
-                </div>
+            {/* Selected Date Compact Ledger Strip */}
+            <div className="bg-white border border-[#DCE4E0] rounded-lg overflow-hidden">
+              <div className="px-3.5 py-2 border-b border-[#DCE4E0] flex flex-wrap items-center justify-between gap-2 bg-[#FAFDFB]">
+                <h2 className="font-display text-sm font-bold text-slate-900">
+                  {formatReadableDate(selectedDate)}
+                </h2>
+                <span className="text-[11px] text-slate-500 font-mono-num">
+                  {selectedAllDayData.vendors.length} vendors · {selectedAllDayData.orders.length}{' '}
+                  orders
+                </span>
               </div>
 
-              {/* 5 Summary Cards for the Selected Date Across All Vendors */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-1">
-                <div className="bg-[#FAFDFB] border border-[#DCE4E0] rounded-lg p-2.5">
-                  <div className="text-[11px] text-slate-500 font-medium">100% Total Kaam</div>
-                  <div className="text-base font-display font-bold font-mono-num text-slate-900 mt-0.5">
+              <div className="grid grid-cols-2 sm:grid-cols-5 divide-y sm:divide-y-0 sm:divide-x divide-[#DCE4E0]">
+                <div className="px-3.5 py-2">
+                  <div className="text-[11px] text-slate-500">Total Work (100%)</div>
+                  <div className="text-sm font-display font-bold font-mono-num text-slate-900 mt-0.5">
                     ₹{formatRupee(selectedAllDayData.totalWork)}
                   </div>
-                  <div className="text-[10px] text-slate-500">
-                    {selectedAllDayData.vendors.length} vendors · {selectedAllDayData.orders.length}{' '}
-                    orders
-                  </div>
                 </div>
 
-                <div className="bg-[#EAF7F0] border border-[#BFEAD1] rounded-lg p-2.5">
-                  <div className="text-[11px] text-[#075E54] font-semibold">
-                    Vendors Earning (70%)
-                  </div>
-                  <div className="text-base font-display font-bold font-mono-num text-[#075E54] mt-0.5">
+                <div className="px-3.5 py-2">
+                  <div className="text-[11px] text-slate-500">Vendor (70%)</div>
+                  <div className="text-sm font-display font-bold font-mono-num text-[#075E54] mt-0.5">
                     ₹{formatRupee(selectedAllDayData.vendorEarning70)}
                   </div>
-                  <div className="text-[10px] text-[#075E54]/80">Selected date</div>
                 </div>
 
-                <div className="bg-[#FFF7ED] border border-amber-200 rounded-lg p-2.5">
-                  <div className="text-[11px] text-amber-900 font-semibold">30% Company Comm</div>
-                  <div className="text-base font-display font-bold font-mono-num text-amber-900 mt-0.5">
+                <div className="px-3.5 py-2">
+                  <div className="text-[11px] text-slate-500">30% Comm</div>
+                  <div className="text-sm font-display font-bold font-mono-num text-slate-900 mt-0.5">
                     ₹{formatRupee(selectedAllDayData.totalComm)}
                   </div>
-                  <div className="text-[10px] text-amber-800/80">Total due</div>
                 </div>
 
-                <div className="bg-white border border-[#DCE4E0] rounded-lg p-2.5">
-                  <div className="text-[11px] text-slate-500 font-medium">Received (Mil Gaya)</div>
-                  <div className="text-base font-display font-bold font-mono-num text-[#128C7E] mt-0.5">
+                <div className="px-3.5 py-2">
+                  <div className="text-[11px] text-slate-500">Received</div>
+                  <div className="text-sm font-display font-bold font-mono-num text-[#128C7E] mt-0.5">
                     ₹{formatRupee(selectedAllDayData.paidComm)}
                   </div>
-                  <div className="text-[10px] text-slate-500">Paid on date</div>
                 </div>
 
-                <div
-                  className={`rounded-lg p-2.5 border ${
-                    selectedAllDayData.pendingComm > 0
-                      ? 'bg-red-50 border-red-300'
-                      : 'bg-emerald-50 border-emerald-200'
-                  }`}
-                >
+                <div className="px-3.5 py-2">
+                  <div className="text-[11px] text-slate-500">Pending</div>
                   <div
-                    className={`text-[11px] font-semibold ${
-                      selectedAllDayData.pendingComm > 0 ? 'text-red-800' : 'text-[#075E54]'
-                    }`}
-                  >
-                    Pending / Baaki
-                  </div>
-                  <div
-                    className={`text-base font-display font-bold font-mono-num mt-0.5 ${
-                      selectedAllDayData.pendingComm > 0 ? 'text-red-700' : 'text-[#075E54]'
+                    className={`text-sm font-display font-bold font-mono-num mt-0.5 ${
+                      selectedAllDayData.pendingComm > 0 ? 'text-red-600' : 'text-[#075E54]'
                     }`}
                   >
                     ₹{formatRupee(selectedAllDayData.pendingComm)}
-                  </div>
-                  <div className="text-[10px] text-slate-600">
-                    {selectedAllDayData.pendingComm > 0 ? 'Leni hai' : 'Full clear'}
                   </div>
                 </div>
               </div>
             </div>
 
             {/* Per-Date All Vendors Work Breakdown Table */}
-            <div className="bg-white border border-[#DCE4E0] rounded-xl overflow-hidden">
-              <div className="px-4 py-2.5 bg-[#FAFDFB] border-b border-[#DCE4E0] flex flex-wrap items-center justify-between gap-2">
-                <div className="text-xs font-bold text-slate-900">
-                  Kon Kon Kitna Kaam Kiya ({formatReadableDate(selectedDate)})
-                </div>
+            <div className="bg-white border border-[#DCE4E0] rounded-lg overflow-hidden">
+              <div className="px-3.5 py-2 border-b border-[#DCE4E0] flex flex-wrap items-center justify-between gap-2 bg-[#FAFDFB]">
+                <div className="text-xs font-bold text-slate-900">Vendor Breakdown</div>
                 {idleVendorsOnSelectedDate.length > 0 && (
                   <button
                     type="button"
                     onClick={() => setShowIdleVendors((p) => !p)}
-                    className="px-2.5 py-1 text-[11px] font-medium bg-white hover:bg-slate-50 border border-[#DCE4E0] rounded-lg text-slate-700 cursor-pointer"
+                    className="px-2.5 py-1 text-[11px] font-medium bg-white hover:bg-slate-50 border border-[#DCE4E0] rounded text-slate-700 cursor-pointer"
                   >
                     {showIdleVendors
-                      ? 'Hide 0-Work Vendors'
-                      : `Show Idle Vendors (${idleVendorsOnSelectedDate.length})`}
+                      ? 'Hide 0-Work'
+                      : `Show Idle (${idleVendorsOnSelectedDate.length})`}
                   </button>
                 )}
               </div>
 
               {visibleAllDayVendors.length === 0 ? (
-                <div className="p-8 text-center">
-                  <div className="text-sm font-semibold text-slate-800">
-                    No vendor work found on {formatReadableDate(selectedDate)}.
-                  </div>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Pick another date above or click any date box in the calendar below.
-                  </p>
+                <div className="p-5 text-center text-xs text-slate-500">
+                  No vendor work on {formatReadableDate(selectedDate)}.
                 </div>
               ) : (
                 <div className="overflow-x-auto sheet-scroll">
-                  <table className="w-full text-left border-collapse min-w-[820px]">
+                  <table className="w-full text-left border-collapse min-w-[740px]">
                     <thead>
-                      <tr className="bg-white border-b border-[#DCE4E0] text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                        <th className="py-2 px-3 w-10 text-center">No</th>
-                        <th className="py-2 px-3">Vendor / Cleaner</th>
-                        <th className="py-2 px-3 text-center">Orders</th>
-                        <th className="py-2 px-3 text-right">100% Kaam</th>
-                        <th className="py-2 px-3 text-right">70% Vendor</th>
-                        <th className="py-2 px-3 text-right">30% Comm</th>
-                        <th className="py-2 px-3 text-right">Received</th>
-                        <th className="py-2 px-3 text-right">Baaki / Status</th>
-                        <th className="py-2 px-3 text-right">Action</th>
+                      <tr className="bg-[#FAFDFB] border-b border-[#DCE4E0] text-[11px] font-semibold text-slate-500">
+                        <th className="py-2 px-2.5 w-9 text-center">No</th>
+                        <th className="py-2 px-2.5">Vendor</th>
+                        <th className="py-2 px-2.5 text-center">Orders</th>
+                        <th className="py-2 px-2.5 text-right">100%</th>
+                        <th className="py-2 px-2.5 text-right">70%</th>
+                        <th className="py-2 px-2.5 text-right">30%</th>
+                        <th className="py-2 px-2.5 text-right">Received</th>
+                        <th className="py-2 px-2.5 text-right">Pending</th>
+                        <th className="py-2 px-2.5 text-right">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#DCE4E0] text-xs">
@@ -1162,73 +1123,61 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                           <tr
                             key={row.vendorName}
                             className={`transition-colors ${
-                              !hasWork
-                                ? 'bg-slate-50/60 text-slate-400'
-                                : isBaaki
-                                  ? 'hover:bg-red-50/40'
-                                  : 'hover:bg-[#FAFDFB]'
+                              !hasWork ? 'text-slate-400 bg-slate-50/40' : 'hover:bg-[#FAFDFB]'
                             }`}
                           >
-                            <td className="py-2.5 px-3 text-center font-mono-num font-semibold text-slate-500">
+                            <td className="py-2 px-2.5 text-center font-mono-num text-slate-400">
                               {idx + 1}
                             </td>
-                            <td className="py-2.5 px-3">
-                              <div className="font-display font-bold text-slate-900">
-                                {row.vendorName}
-                              </div>
-                              <div className="text-[11px] text-slate-500 flex items-center gap-2">
-                                {row.phone && <span className="font-mono-num">{row.phone}</span>}
-                                {row.city && row.city !== '—' && <span>· {row.city}</span>}
-                              </div>
-                            </td>
-                            <td className="py-2.5 px-3 text-center font-mono-num">
-                              {hasWork ? (
-                                <div>
-                                  <span className="font-bold text-slate-900">
-                                    {row.orders.length}
-                                  </span>
-                                  {row.activeCount > 0 && (
-                                    <div className="text-[10px] text-amber-700">
-                                      {row.completedCount} done · {row.activeCount} active
-                                    </div>
-                                  )}
+                            <td className="py-2 px-2.5">
+                              <div className="font-semibold text-slate-900">{row.vendorName}</div>
+                              {(row.phone || (row.city && row.city !== '—')) && (
+                                <div className="text-[10px] text-slate-500 font-mono-num">
+                                  {[row.city !== '—' ? row.city : '', row.phone]
+                                    .filter(Boolean)
+                                    .join(' · ')}
                                 </div>
+                              )}
+                            </td>
+                            <td className="py-2 px-2.5 text-center font-mono-num">
+                              {hasWork ? (
+                                <span className="font-semibold text-slate-900">
+                                  {row.orders.length}
+                                </span>
                               ) : (
                                 '0'
                               )}
                             </td>
-                            <td className="py-2.5 px-3 text-right font-mono-num font-bold text-slate-900">
+                            <td className="py-2 px-2.5 text-right font-mono-num font-semibold text-slate-900">
                               ₹{formatRupee(row.totalWork)}
                             </td>
-                            <td className="py-2.5 px-3 text-right font-mono-num font-semibold text-[#075E54]">
+                            <td className="py-2 px-2.5 text-right font-mono-num text-[#075E54]">
                               ₹{formatRupee(row.vendorEarning70)}
                             </td>
-                            <td className="py-2.5 px-3 text-right font-mono-num font-semibold text-amber-900">
+                            <td className="py-2 px-2.5 text-right font-mono-num text-slate-800">
                               ₹{formatRupee(row.totalComm)}
                             </td>
-                            <td className="py-2.5 px-3 text-right font-mono-num font-semibold text-[#128C7E]">
+                            <td className="py-2 px-2.5 text-right font-mono-num text-[#128C7E]">
                               ₹{formatRupee(row.paidComm)}
                             </td>
-                            <td className="py-2.5 px-3 text-right font-mono-num">
+                            <td className="py-2 px-2.5 text-right font-mono-num">
                               {!hasWork ? (
-                                <span className="text-[11px] text-slate-400">No Work</span>
+                                <span className="text-slate-400">—</span>
                               ) : isBaaki ? (
-                                <span className="px-2 py-0.5 rounded bg-red-50 border border-red-200 text-red-700 text-[11px] font-bold">
-                                  Baaki: ₹{formatRupee(row.pendingComm)}
+                                <span className="font-bold text-red-600">
+                                  ₹{formatRupee(row.pendingComm)}
                                 </span>
                               ) : (
-                                <span className="px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-[#075E54] text-[11px] font-semibold">
-                                  Full Clear
-                                </span>
+                                <span className="font-semibold text-[#075E54]">Clear</span>
                               )}
                             </td>
-                            <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                            <td className="py-2 px-2.5 text-right whitespace-nowrap">
                               <div className="inline-flex items-center gap-1.5">
                                 {hasWork && (
                                   <button
                                     type="button"
                                     onClick={() => handleOpenDatePopup(selectedDate, row.vendorName)}
-                                    className="px-2.5 py-1 text-[11px] font-semibold bg-[#075E54] hover:bg-[#054A42] text-white rounded-lg cursor-pointer"
+                                    className="px-2.5 py-1 text-[11px] font-semibold bg-[#075E54] hover:bg-[#054A42] text-white rounded cursor-pointer"
                                   >
                                     Pay / Orders
                                   </button>
@@ -1236,7 +1185,7 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => handleSelectVendor(row.vendorName, selectedDate)}
-                                  className="px-2.5 py-1 text-[11px] font-semibold bg-white hover:bg-slate-50 border border-[#DCE4E0] text-slate-700 rounded-lg cursor-pointer"
+                                  className="px-2.5 py-1 text-[11px] font-medium bg-white hover:bg-[#FAFDFB] border border-[#DCE4E0] text-slate-700 rounded cursor-pointer"
                                 >
                                   Calendar
                                 </button>
@@ -1248,38 +1197,38 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                     </tbody>
                     {selectedAllDayData.vendors.length > 0 && (
                       <tfoot>
-                        <tr className="bg-[#FAFDFB] border-t-2 border-[#DCE4E0] text-xs font-mono-num font-bold text-slate-900">
-                          <td className="py-2.5 px-3" />
-                          <td className="py-2.5 px-3 font-sans">
-                            Total ({selectedAllDayData.vendors.length} Vendors)
+                        <tr className="bg-[#FAFDFB] border-t border-[#DCE4E0] text-xs font-mono-num font-bold text-slate-900">
+                          <td className="py-2 px-2.5" />
+                          <td className="py-2 px-2.5 font-sans">
+                            Total ({selectedAllDayData.vendors.length})
                           </td>
-                          <td className="py-2.5 px-3 text-center">
+                          <td className="py-2 px-2.5 text-center">
                             {selectedAllDayData.orders.length}
                           </td>
-                          <td className="py-2.5 px-3 text-right">
+                          <td className="py-2 px-2.5 text-right">
                             ₹{formatRupee(selectedAllDayData.totalWork)}
                           </td>
-                          <td className="py-2.5 px-3 text-right text-[#075E54]">
+                          <td className="py-2 px-2.5 text-right text-[#075E54]">
                             ₹{formatRupee(selectedAllDayData.vendorEarning70)}
                           </td>
-                          <td className="py-2.5 px-3 text-right text-amber-900">
+                          <td className="py-2 px-2.5 text-right">
                             ₹{formatRupee(selectedAllDayData.totalComm)}
                           </td>
-                          <td className="py-2.5 px-3 text-right text-[#128C7E]">
+                          <td className="py-2 px-2.5 text-right text-[#128C7E]">
                             ₹{formatRupee(selectedAllDayData.paidComm)}
                           </td>
-                          <td className="py-2.5 px-3 text-right">
+                          <td className="py-2 px-2.5 text-right">
                             <span
                               className={
                                 selectedAllDayData.pendingComm > 0
-                                  ? 'text-red-700'
+                                  ? 'text-red-600'
                                   : 'text-[#075E54]'
                               }
                             >
                               ₹{formatRupee(selectedAllDayData.pendingComm)}
                             </span>
                           </td>
-                          <td className="py-2.5 px-3" />
+                          <td className="py-2 px-2.5" />
                         </tr>
                       </tfoot>
                     )}
@@ -1288,18 +1237,18 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
               )}
             </div>
 
-            {/* Combined Monthly Calendar for All Vendors (Click any date box to inspect that date above) */}
-            <div className="bg-white border border-[#DCE4E0] rounded-xl p-4 space-y-3">
+            {/* Combined Monthly Calendar for All Vendors */}
+            <div className="bg-white border border-[#DCE4E0] rounded-lg p-3 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-4 text-xs">
-                  <span className="font-bold text-slate-900">All Vendors Calendar</span>
-                  <span className="inline-flex items-center gap-1.5 text-slate-700">
-                    <span className="w-3.5 h-3.5 rounded bg-red-100 border border-red-400 inline-block" />
-                    Red = Baaki Pending
+                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                  <span className="font-semibold text-slate-900">Calendar</span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-red-200 border border-red-400 inline-block" />
+                    Pending
                   </span>
-                  <span className="inline-flex items-center gap-1.5 text-slate-700">
-                    <span className="w-3.5 h-3.5 rounded bg-emerald-100 border border-emerald-400 inline-block" />
-                    Green = Full Clear
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-emerald-200 border border-emerald-400 inline-block" />
+                    Clear
                   </span>
                 </div>
 
@@ -1308,11 +1257,11 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                     type="button"
                     onClick={() => changeMonth(-1)}
                     aria-label="Previous month"
-                    className="p-1.5 bg-[#F7F9F8] hover:bg-[#EFF4F1] border border-[#DCE4E0] rounded-lg cursor-pointer"
+                    className="p-1.5 bg-white hover:bg-[#FAFDFB] border border-[#DCE4E0] rounded cursor-pointer"
                   >
-                    <ChevronLeft className="w-4 h-4 text-slate-700" />
+                    <ChevronLeft className="w-3.5 h-3.5 text-slate-700" />
                   </button>
-                  <div className="px-3 py-1.5 text-xs font-bold text-slate-900 bg-[#FAFDFB] border border-[#DCE4E0] rounded-lg min-w-[130px] text-center inline-flex items-center justify-center gap-1.5">
+                  <div className="px-3 py-1 text-xs font-bold text-slate-900 bg-[#FAFDFB] border border-[#DCE4E0] rounded min-w-[124px] text-center inline-flex items-center justify-center gap-1.5">
                     <Calendar className="w-3.5 h-3.5 text-[#075E54]" />
                     {MONTH_NAMES[viewMonth]} {viewYear}
                   </div>
@@ -1320,9 +1269,9 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                     type="button"
                     onClick={() => changeMonth(1)}
                     aria-label="Next month"
-                    className="p-1.5 bg-[#F7F9F8] hover:bg-[#EFF4F1] border border-[#DCE4E0] rounded-lg cursor-pointer"
+                    className="p-1.5 bg-white hover:bg-[#FAFDFB] border border-[#DCE4E0] rounded cursor-pointer"
                   >
-                    <ChevronRight className="w-4 h-4 text-slate-700" />
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-700" />
                   </button>
                   <button
                     type="button"
@@ -1332,7 +1281,7 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                       setViewMonth(t.getMonth());
                       setSelectedDate(todayStr());
                     }}
-                    className="px-2.5 py-1.5 text-xs font-medium bg-white hover:bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg text-slate-700 cursor-pointer"
+                    className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-[#FAFDFB] border border-[#DCE4E0] rounded text-slate-700 cursor-pointer"
                   >
                     Today
                   </button>
@@ -1355,11 +1304,11 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                 </div>
               )}
 
-              <div className="grid grid-cols-7 gap-1.5">
+              <div className="grid grid-cols-7 gap-1">
                 {WEEKDAYS.map((wd) => (
                   <div
                     key={wd}
-                    className="text-center text-[11px] font-semibold text-slate-500 py-1 uppercase"
+                    className="text-center text-[10px] font-semibold text-slate-400 py-0.5 uppercase"
                   >
                     {wd}
                   </div>
@@ -1367,7 +1316,7 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
 
                 {calendarCells.map((cell, idx) => {
                   if (!cell) {
-                    return <div key={`all-empty-${idx}`} className="h-24 rounded-lg bg-[#FAFDFB]" />;
+                    return <div key={`all-empty-${idx}`} className="h-16 rounded bg-[#FAFDFB]" />;
                   }
 
                   const dayInfo = allOrdersByDate.get(cell.dateStr);
@@ -1376,12 +1325,12 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                   const isSelected = selectedDate === cell.dateStr;
                   const isToday = cell.dateStr === todayStr();
 
-                  let boxStyle = 'bg-white border-[#E4EBE7] text-slate-700 hover:bg-slate-50';
+                  let boxStyle = 'bg-white border-[#E4EBE7] text-slate-700 hover:bg-[#FAFDFB]';
                   if (hasPending) {
-                    boxStyle = 'bg-red-50 border-red-400 text-red-950 hover:bg-red-100/80';
+                    boxStyle = 'bg-red-50/70 border-red-300 text-red-950 hover:bg-red-50';
                   } else if (hasOrders) {
                     boxStyle =
-                      'bg-emerald-50 border-emerald-400 text-[#075E54] hover:bg-emerald-100/70';
+                      'bg-emerald-50/70 border-emerald-300 text-[#075E54] hover:bg-emerald-50';
                   }
 
                   return (
@@ -1389,37 +1338,37 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                       key={cell.dateStr}
                       type="button"
                       onClick={() => handlePickAllVendorsDate(cell.dateStr)}
-                      className={`h-24 p-2 rounded-lg border text-left flex flex-col justify-between transition-all cursor-pointer ${boxStyle} ${
+                      className={`h-16 p-1.5 rounded border text-left flex flex-col justify-between transition-all cursor-pointer ${boxStyle} ${
                         isSelected ? 'ring-2 ring-slate-900' : ''
                       }`}
                     >
                       <div className="flex items-center justify-between w-full gap-1">
                         <span
-                          className={`text-xs font-mono-num font-bold ${
+                          className={`text-[11px] font-mono-num font-bold ${
                             isToday ? 'underline decoration-2' : ''
                           }`}
                         >
                           {cell.day}
                         </span>
                         {hasOrders && dayInfo && (
-                          <span className="text-[10px] font-mono-num font-semibold px-1 rounded bg-white/80 truncate">
-                            {dayInfo.vendors.length}v · {dayInfo.orders.length}o
+                          <span className="text-[9px] font-mono-num text-slate-500 truncate">
+                            {dayInfo.orders.length}o
                           </span>
                         )}
                       </div>
 
                       {hasOrders && dayInfo ? (
-                        <div className="w-full space-y-0.5">
-                          <div className="text-[10px] font-mono-num opacity-85 truncate">
-                            Work: ₹{formatRupee(dayInfo.totalWork)}
+                        <div className="w-full leading-tight">
+                          <div className="text-[10px] font-mono-num text-slate-600 truncate">
+                            ₹{formatRupee(dayInfo.totalWork)}
                           </div>
                           {hasPending ? (
-                            <div className="text-[11px] font-mono-num font-bold text-red-700 truncate">
-                              Baaki: ₹{formatRupee(dayInfo.pendingComm)}
+                            <div className="text-[10px] font-mono-num font-bold text-red-700 truncate">
+                              Due ₹{formatRupee(dayInfo.pendingComm)}
                             </div>
                           ) : (
-                            <div className="text-[11px] font-mono-num font-bold text-[#075E54] truncate">
-                              30%: ₹{formatRupee(dayInfo.totalComm)}
+                            <div className="text-[10px] font-mono-num font-bold text-[#075E54] truncate">
+                              Clear
                             </div>
                           )}
                         </div>
@@ -1433,168 +1382,82 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
             </div>
           </>
         ) : !activeVendorInfo ? (
-          <div className="bg-white border border-[#DCE4E0] rounded-xl p-10 text-center text-sm text-slate-500">
-            Select a cleaner on the left to view their earning & payment calendar.
+          <div className="bg-white border border-[#DCE4E0] rounded-lg p-6 text-center text-xs text-slate-500">
+            Select a cleaner on the left to view their ledger.
           </div>
         ) : (
           <>
-            {/* Date-to-Date / Monthly Earning Filter & Vendor Earning Summary */}
-            <div className="bg-white border border-[#DCE4E0] rounded-xl p-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2.5">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="font-display text-base font-bold text-slate-900">
-                      {activeVendorInfo.name}
-                    </h2>
-                    {activeVendorInfo.phone && (
-                      <span className="text-xs font-mono-num text-slate-600 inline-flex items-center gap-1">
-                        <Phone className="w-3 h-3 text-slate-400" />
-                        {activeVendorInfo.phone}
-                      </span>
-                    )}
-                    <span className="text-xs text-slate-600 inline-flex items-center gap-1">
-                      <MapPin className="w-3 h-3 text-slate-400" />
-                      {activeVendorInfo.city}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Date-to-Date Earning Filter Controls */}
-                <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => applyEarningPreset('this_month')}
-                    className={`px-2.5 py-1 rounded border cursor-pointer font-medium ${
-                      earningFrom === thisMonthRange.from && earningTo === thisMonthRange.to
-                        ? 'bg-[#075E54] text-white border-[#075E54]'
-                        : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#F7F9F8]'
-                    }`}
-                  >
-                    This Month
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyEarningPreset('last_month')}
-                    className={`px-2.5 py-1 rounded border cursor-pointer font-medium ${
-                      earningFrom === lastMonthRange.from && earningTo === lastMonthRange.to
-                        ? 'bg-[#075E54] text-white border-[#075E54]'
-                        : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#F7F9F8]'
-                    }`}
-                  >
-                    Last Month
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyEarningPreset('all')}
-                    className={`px-2.5 py-1 rounded border cursor-pointer font-medium ${
-                      !earningFrom && !earningTo
-                        ? 'bg-[#075E54] text-white border-[#075E54]'
-                        : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#F7F9F8]'
-                    }`}
-                  >
-                    All Dates
-                  </button>
-
-                  <div className="flex items-center gap-1 ml-1">
-                    <span className="text-slate-500">From</span>
-                    <IndianDateInput
-                      ariaLabel="Earning from date"
-                      title="From Date (DD/MM/YY)"
-                      value={earningFrom}
-                      onChange={setEarningFrom}
-                      allowClear
-                      className="min-w-[106px]"
-                    />
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-slate-500">To</span>
-                    <IndianDateInput
-                      ariaLabel="Earning to date"
-                      title="To Date (DD/MM/YY)"
-                      value={earningTo}
-                      onChange={setEarningTo}
-                      allowClear
-                      className="min-w-[106px]"
-                    />
-                  </div>
-                </div>
+            {/* Single Vendor Compact Ledger Strip */}
+            <div className="bg-white border border-[#DCE4E0] rounded-lg overflow-hidden">
+              <div className="px-3.5 py-2 border-b border-[#DCE4E0] flex flex-wrap items-center justify-between gap-2 bg-[#FAFDFB]">
+                <h2 className="font-display text-sm font-bold text-slate-900">
+                  {activeVendorInfo.name}
+                </h2>
+                <span className="text-[11px] text-slate-500 font-mono-num">
+                  {[
+                    activeVendorInfo.city !== '—' ? activeVendorInfo.city : '',
+                    activeVendorInfo.phone,
+                    `${activeVendorInfo.rangeOrderCount} orders`,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </span>
               </div>
 
-              {/* Earning & Commission Summary Strip for Selected Date Range */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-1">
-                <div className="bg-[#FAFDFB] border border-[#DCE4E0] rounded-lg p-2.5">
-                  <div className="text-[11px] text-slate-500 font-medium">100% Total Kaam</div>
-                  <div className="text-base font-display font-bold font-mono-num text-slate-900 mt-0.5">
+              <div className="grid grid-cols-2 sm:grid-cols-5 divide-y sm:divide-y-0 sm:divide-x divide-[#DCE4E0]">
+                <div className="px-3.5 py-2">
+                  <div className="text-[11px] text-slate-500">Total Work (100%)</div>
+                  <div className="text-sm font-display font-bold font-mono-num text-slate-900 mt-0.5">
                     ₹{formatRupee(activeVendorInfo.totalWork)}
                   </div>
-                  <div className="text-[10px] text-slate-500">
-                    {activeVendorInfo.rangeOrderCount} order(s)
-                  </div>
                 </div>
 
-                <div className="bg-[#EAF7F0] border border-[#BFEAD1] rounded-lg p-2.5">
-                  <div className="text-[11px] text-[#075E54] font-semibold">
-                    Vendor Earning (70%)
-                  </div>
-                  <div className="text-base font-display font-bold font-mono-num text-[#075E54] mt-0.5">
+                <div className="px-3.5 py-2">
+                  <div className="text-[11px] text-slate-500">Vendor (70%)</div>
+                  <div className="text-sm font-display font-bold font-mono-num text-[#075E54] mt-0.5">
                     ₹{formatRupee(activeVendorInfo.vendorEarning70)}
                   </div>
-                  <div className="text-[10px] text-[#075E54]/80">Selected range</div>
                 </div>
 
-                <div className="bg-[#FFF7ED] border border-amber-200 rounded-lg p-2.5">
-                  <div className="text-[11px] text-amber-900 font-semibold">30% Company Comm</div>
-                  <div className="text-base font-display font-bold font-mono-num text-amber-900 mt-0.5">
+                <div className="px-3.5 py-2">
+                  <div className="text-[11px] text-slate-500">30% Comm</div>
+                  <div className="text-sm font-display font-bold font-mono-num text-slate-900 mt-0.5">
                     ₹{formatRupee(activeVendorInfo.totalComm)}
                   </div>
-                  <div className="text-[10px] text-amber-800/80">Total due</div>
                 </div>
 
-                <div className="bg-white border border-[#DCE4E0] rounded-lg p-2.5">
-                  <div className="text-[11px] text-slate-500 font-medium">Received (Mil Gaya)</div>
-                  <div className="text-base font-display font-bold font-mono-num text-[#128C7E] mt-0.5">
+                <div className="px-3.5 py-2">
+                  <div className="text-[11px] text-slate-500">Received</div>
+                  <div className="text-sm font-display font-bold font-mono-num text-[#128C7E] mt-0.5">
                     ₹{formatRupee(activeVendorInfo.paidComm)}
                   </div>
-                  <div className="text-[10px] text-slate-500">Paid so far</div>
                 </div>
 
-                <div
-                  className={`rounded-lg p-2.5 border ${
-                    activeVendorInfo.pendingComm > 0
-                      ? 'bg-red-50 border-red-300'
-                      : 'bg-emerald-50 border-emerald-200'
-                  }`}
-                >
+                <div className="px-3.5 py-2">
+                  <div className="text-[11px] text-slate-500">Pending</div>
                   <div
-                    className={`text-[11px] font-semibold ${
-                      activeVendorInfo.pendingComm > 0 ? 'text-red-800' : 'text-[#075E54]'
-                    }`}
-                  >
-                    Pending / Roka Hua
-                  </div>
-                  <div
-                    className={`text-base font-display font-bold font-mono-num mt-0.5 ${
-                      activeVendorInfo.pendingComm > 0 ? 'text-red-700' : 'text-[#075E54]'
+                    className={`text-sm font-display font-bold font-mono-num mt-0.5 ${
+                      activeVendorInfo.pendingComm > 0 ? 'text-red-600' : 'text-[#075E54]'
                     }`}
                   >
                     ₹{formatRupee(activeVendorInfo.pendingComm)}
                   </div>
-                  <div className="text-[10px] text-slate-600">Leni hai</div>
                 </div>
               </div>
             </div>
 
             {/* Monthly Calendar Grid */}
-            <div className="bg-white border border-[#DCE4E0] rounded-xl p-4 space-y-3">
+            <div className="bg-white border border-[#DCE4E0] rounded-lg p-3 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-4 text-xs">
-                  <span className="inline-flex items-center gap-1.5 text-slate-700">
-                    <span className="w-3.5 h-3.5 rounded bg-red-100 border border-red-400 inline-block" />
-                    Red Box = Pending / Baaki (100, 200 Roka Hua)
+                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                  <span className="font-semibold text-slate-900">Calendar</span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-red-200 border border-red-400 inline-block" />
+                    Pending
                   </span>
-                  <span className="inline-flex items-center gap-1.5 text-slate-700">
-                    <span className="w-3.5 h-3.5 rounded bg-emerald-100 border border-emerald-400 inline-block" />
-                    Green Box = Full Clear
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-emerald-200 border border-emerald-400 inline-block" />
+                    Clear
                   </span>
                 </div>
 
@@ -1604,11 +1467,11 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                     type="button"
                     onClick={() => changeMonth(-1)}
                     aria-label="Previous month"
-                    className="p-1.5 bg-[#F7F9F8] hover:bg-[#EFF4F1] border border-[#DCE4E0] rounded-lg cursor-pointer"
+                    className="p-1.5 bg-white hover:bg-[#FAFDFB] border border-[#DCE4E0] rounded cursor-pointer"
                   >
-                    <ChevronLeft className="w-4 h-4 text-slate-700" />
+                    <ChevronLeft className="w-3.5 h-3.5 text-slate-700" />
                   </button>
-                  <div className="px-3 py-1.5 text-xs font-bold text-slate-900 bg-[#FAFDFB] border border-[#DCE4E0] rounded-lg min-w-[130px] text-center inline-flex items-center justify-center gap-1.5">
+                  <div className="px-3 py-1 text-xs font-bold text-slate-900 bg-[#FAFDFB] border border-[#DCE4E0] rounded min-w-[124px] text-center inline-flex items-center justify-center gap-1.5">
                     <Calendar className="w-3.5 h-3.5 text-[#075E54]" />
                     {MONTH_NAMES[viewMonth]} {viewYear}
                   </div>
@@ -1616,9 +1479,9 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                     type="button"
                     onClick={() => changeMonth(1)}
                     aria-label="Next month"
-                    className="p-1.5 bg-[#F7F9F8] hover:bg-[#EFF4F1] border border-[#DCE4E0] rounded-lg cursor-pointer"
+                    className="p-1.5 bg-white hover:bg-[#FAFDFB] border border-[#DCE4E0] rounded cursor-pointer"
                   >
-                    <ChevronRight className="w-4 h-4 text-slate-700" />
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-700" />
                   </button>
                   <button
                     type="button"
@@ -1628,7 +1491,7 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                       setViewMonth(t.getMonth());
                       setSelectedDate(todayStr());
                     }}
-                    className="px-2.5 py-1.5 text-xs font-medium bg-white hover:bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg text-slate-700 cursor-pointer"
+                    className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-[#FAFDFB] border border-[#DCE4E0] rounded text-slate-700 cursor-pointer"
                   >
                     Today
                   </button>
@@ -1651,11 +1514,11 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                 </div>
               )}
 
-              <div className="grid grid-cols-7 gap-1.5">
+              <div className="grid grid-cols-7 gap-1">
                 {WEEKDAYS.map((wd) => (
                   <div
                     key={wd}
-                    className="text-center text-[11px] font-semibold text-slate-500 py-1 uppercase"
+                    className="text-center text-[10px] font-semibold text-slate-400 py-0.5 uppercase"
                   >
                     {wd}
                   </div>
@@ -1663,7 +1526,7 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
 
                 {calendarCells.map((cell, idx) => {
                   if (!cell) {
-                    return <div key={`empty-${idx}`} className="h-24 rounded-lg bg-[#FAFDFB]" />;
+                    return <div key={`empty-${idx}`} className="h-16 rounded bg-[#FAFDFB]" />;
                   }
 
                   const dayInfo = ordersByDate.get(cell.dateStr);
@@ -1675,12 +1538,12 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                   const isSelected = selectedDate === cell.dateStr && dayModalOpen;
                   const isToday = cell.dateStr === todayStr();
 
-                  let boxStyle = 'bg-white border-[#E4EBE7] text-slate-700 hover:bg-slate-50';
+                  let boxStyle = 'bg-white border-[#E4EBE7] text-slate-700 hover:bg-[#FAFDFB]';
                   if (hasPending) {
-                    boxStyle = 'bg-red-50 border-red-400 text-red-950 hover:bg-red-100/80';
+                    boxStyle = 'bg-red-50/70 border-red-300 text-red-950 hover:bg-red-50';
                   } else if (hasOrders) {
                     boxStyle =
-                      'bg-emerald-50 border-emerald-400 text-[#075E54] hover:bg-emerald-100/70';
+                      'bg-emerald-50/70 border-emerald-300 text-[#075E54] hover:bg-emerald-50';
                   }
 
                   return (
@@ -1688,44 +1551,38 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                       key={cell.dateStr}
                       type="button"
                       onClick={() => handleOpenDatePopup(cell.dateStr)}
-                      className={`h-24 p-2 rounded-lg border text-left flex flex-col justify-between transition-all cursor-pointer ${boxStyle} ${
+                      className={`h-16 p-1.5 rounded border text-left flex flex-col justify-between transition-all cursor-pointer ${boxStyle} ${
                         isSelected ? 'ring-2 ring-slate-900' : ''
                       }`}
                     >
                       <div className="flex items-center justify-between w-full">
                         <span
-                          className={`text-xs font-mono-num font-bold ${
+                          className={`text-[11px] font-mono-num font-bold ${
                             isToday ? 'underline decoration-2' : ''
                           }`}
                         >
                           {cell.day}
                         </span>
                         {hasOrders && dayInfo && (
-                          <span className="text-[10px] font-mono-num font-semibold px-1 rounded bg-white/80">
-                            {dayInfo.orders.length} ord
+                          <span className="text-[9px] font-mono-num text-slate-500">
+                            {dayInfo.orders.length}o
                           </span>
                         )}
                       </div>
 
                       {hasOrders && dayInfo ? (
-                        <div className="w-full space-y-0.5">
-                          <div className="text-[10px] font-mono-num opacity-80 truncate">
-                            Work: ₹{formatRupee(dayInfo.totalWork)}
+                        <div className="w-full leading-tight">
+                          <div className="text-[10px] font-mono-num text-slate-600 truncate">
+                            ₹{formatRupee(dayInfo.totalWork)}
                           </div>
                           {hasPending ? (
-                            <>
-                              <div className="text-[11px] font-mono-num font-bold text-red-700 truncate">
-                                Baaki: ₹{formatRupee(dayInfo.pendingComm)}
-                              </div>
-                              {isPartial && (
-                                <div className="text-[9px] font-semibold text-amber-800 truncate">
-                                  Paid ₹{formatRupee(dayInfo.paidComm)}
-                                </div>
-                              )}
-                            </>
+                            <div className="text-[10px] font-mono-num font-bold text-red-700 truncate">
+                              Due ₹{formatRupee(dayInfo.pendingComm)}
+                              {isPartial ? '*' : ''}
+                            </div>
                           ) : (
-                            <div className="text-[11px] font-mono-num font-bold text-[#075E54] truncate">
-                              30%: ₹{formatRupee(dayInfo.totalComm)}
+                            <div className="text-[10px] font-mono-num font-bold text-[#075E54] truncate">
+                              Clear
                             </div>
                           )}
                         </div>
@@ -1741,10 +1598,10 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
         )}
       </div>
 
-      {/* Date Click Popup Modal: 100% Work, 30% Company Charge, Partial / Roka Hua Support */}
+      {/* Date Click Popup Modal */}
       {dayModalOpen && modalVendorInfo && (
         <div
-          className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-3"
           role="dialog"
           aria-modal="true"
           aria-labelledby="day-payment-modal-title"
@@ -1752,98 +1609,80 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-[760px] bg-white border border-[#DCE4E0] rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
+            className="w-full max-w-[740px] bg-white border border-[#DCE4E0] rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
           >
             {/* Modal Header */}
-            <div className="px-5 py-3.5 bg-[#075E54] text-white flex items-center justify-between gap-3">
+            <div className="px-4 py-2.5 bg-[#075E54] text-white flex items-center justify-between gap-3">
               <div>
-                <h3 id="day-payment-modal-title" className="font-display text-base font-bold">
+                <h3 id="day-payment-modal-title" className="font-display text-sm font-bold">
                   {modalVendorInfo.name} — {formatReadableDate(selectedDate)}
                 </h3>
-                <p className="text-xs text-emerald-100/85">
-                  {modalVendorInfo.phone ? `${modalVendorInfo.phone} · ` : ''}
-                  {modalVendorInfo.city} · {selectedDayData.orders.length} Order(s)
+                <p className="text-[11px] text-emerald-100/85">
+                  {[
+                    modalVendorInfo.phone,
+                    modalVendorInfo.city !== '—' ? modalVendorInfo.city : '',
+                    `${selectedDayData.orders.length} Orders`,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setDayModalOpen(false)}
                 aria-label="Close date popup"
-                className="p-1.5 rounded-lg hover:bg-white/15 text-white cursor-pointer"
+                className="p-1 rounded hover:bg-white/15 text-white cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* 100% Work, 30% Commission, Received & Pending/Roka Hua */}
-            <div className="p-4 bg-[#FAFDFB] border-b border-[#DCE4E0] space-y-3">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                <div className="bg-white border border-[#DCE4E0] rounded-lg p-2.5">
-                  <div className="text-[11px] font-semibold text-slate-500">100% Total Kaam</div>
-                  <div className="text-lg font-display font-bold font-mono-num text-slate-900 mt-0.5">
+            {/* Compact Summary & Payment Form */}
+            <div className="p-3 bg-[#FAFDFB] border-b border-[#DCE4E0] space-y-2.5">
+              <div className="bg-white border border-[#DCE4E0] rounded-lg grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-[#DCE4E0]">
+                <div className="px-3 py-2">
+                  <div className="text-[11px] text-slate-500">100% Work</div>
+                  <div className="text-sm font-display font-bold font-mono-num text-slate-900">
                     ₹{formatRupee(selectedDayData.totalWork)}
                   </div>
-                  <div className="text-[10px] text-slate-500">
-                    Vendor 70%: ₹{formatRupee(selectedDayData.totalWork - selectedDayData.totalComm)}
-                  </div>
                 </div>
 
-                <div className="bg-[#FFF7ED] border border-amber-300 rounded-lg p-2.5">
-                  <div className="text-[11px] font-bold text-amber-900">
-                    30% Company Charge
-                  </div>
-                  <div className="text-lg font-display font-bold font-mono-num text-amber-900 mt-0.5">
+                <div className="px-3 py-2">
+                  <div className="text-[11px] text-slate-500">30% Comm</div>
+                  <div className="text-sm font-display font-bold font-mono-num text-slate-900">
                     ₹{formatRupee(selectedDayData.totalComm)}
                   </div>
-                  <div className="text-[10px] text-amber-800">Total 30% leni hai</div>
                 </div>
 
-                <div className="bg-white border border-[#DCE4E0] rounded-lg p-2.5">
-                  <div className="text-[11px] font-semibold text-slate-500">Received (Mil Gaya)</div>
-                  <div className="text-lg font-display font-bold font-mono-num text-[#128C7E] mt-0.5">
+                <div className="px-3 py-2">
+                  <div className="text-[11px] text-slate-500">Received</div>
+                  <div className="text-sm font-display font-bold font-mono-num text-[#128C7E]">
                     ₹{formatRupee(selectedDayData.paidComm)}
                   </div>
-                  <div className="text-[10px] text-slate-500">Vendor ne diya</div>
                 </div>
 
-                <div
-                  className={`rounded-lg p-2.5 border ${
-                    selectedDayData.pendingComm > 0
-                      ? 'bg-red-50 border-red-300'
-                      : 'bg-emerald-50 border-emerald-300'
-                  }`}
-                >
+                <div className="px-3 py-2">
+                  <div className="text-[11px] text-slate-500">Pending</div>
                   <div
-                    className={`text-[11px] font-bold ${
-                      selectedDayData.pendingComm > 0 ? 'text-red-800' : 'text-[#075E54]'
-                    }`}
-                  >
-                    {selectedDayData.pendingComm > 0 ? 'Pending / Roka Hua' : 'Status'}
-                  </div>
-                  <div
-                    className={`text-lg font-display font-bold font-mono-num mt-0.5 ${
-                      selectedDayData.pendingComm > 0 ? 'text-red-700' : 'text-[#075E54]'
+                    className={`text-sm font-display font-bold font-mono-num ${
+                      selectedDayData.pendingComm > 0 ? 'text-red-600' : 'text-[#075E54]'
                     }`}
                   >
                     {selectedDayData.pendingComm > 0
                       ? `₹${formatRupee(selectedDayData.pendingComm)}`
-                      : 'Full Clear'}
-                  </div>
-                  <div className="text-[10px] text-slate-600">
-                    {selectedDayData.pendingComm > 0 ? 'Baaki lena hai' : '0 pending'}
+                      : 'Clear'}
                   </div>
                 </div>
               </div>
 
-              {/* Partial / Custom Day Payment Box (for 100 / 200 / 250 held back) */}
               {selectedDayData.orders.length > 0 && (
                 <form
                   onSubmit={handleSaveDayPartialPayment}
-                  className="bg-white border border-[#DCE4E0] rounded-lg p-3 flex flex-wrap items-end gap-2.5"
+                  className="bg-white border border-[#DCE4E0] rounded-lg p-2.5 flex flex-wrap items-end gap-2"
                 >
-                  <div className="w-36">
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                      Received Today (₹)
+                  <div className="w-32">
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                      Received (₹)
                     </label>
                     <input
                       type="number"
@@ -1852,26 +1691,26 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                       step="any"
                       value={dayReceivedInput}
                       onChange={(e) => setDayReceivedInput(e.target.value)}
-                      className="w-full px-2.5 py-1.5 text-xs font-mono-num bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
+                      className="w-full px-2.5 py-1 text-xs font-mono-num bg-[#FAFDFB] border border-[#DCE4E0] rounded focus:bg-white focus:outline-none focus:border-[#128C7E]"
                     />
                   </div>
 
-                  <div className="flex-1 min-w-[160px]">
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                      Hold / Payment Note (e.g. 200 roka hai)
+                  <div className="flex-1 min-w-[150px]">
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                      Note (optional)
                     </label>
                     <input
                       type="text"
                       value={dayPayNote}
                       onChange={(e) => setDayPayNote(e.target.value)}
-                      placeholder="Optional note..."
-                      className="w-full px-2.5 py-1.5 text-xs bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
+                      placeholder="e.g. 200 roka hai..."
+                      className="w-full px-2.5 py-1 text-xs bg-[#FAFDFB] border border-[#DCE4E0] rounded focus:bg-white focus:outline-none focus:border-[#128C7E]"
                     />
                   </div>
 
-                  <div className="text-[11px] font-mono-num pb-1.5">
+                  <div className="text-xs font-mono-num pb-1">
                     <span className="text-slate-500">Baaki: </span>
-                    <strong className={liveDayBalance > 0 ? 'text-red-700' : 'text-[#075E54]'}>
+                    <strong className={liveDayBalance > 0 ? 'text-red-600' : 'text-[#075E54]'}>
                       ₹{formatRupee(liveDayBalance)}
                     </strong>
                   </div>
@@ -1879,16 +1718,15 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                   <button
                     type="submit"
                     disabled={bulkBusy}
-                    className="px-3 py-1.5 text-xs font-semibold bg-[#075E54] hover:bg-[#054A42] disabled:opacity-50 text-white rounded-lg cursor-pointer whitespace-nowrap"
+                    className="px-3 py-1 text-xs font-semibold bg-[#075E54] hover:bg-[#054A42] disabled:opacity-50 text-white rounded cursor-pointer whitespace-nowrap"
                   >
-                    Save Received
+                    Save
                   </button>
                 </form>
               )}
 
-              {/* Day-level Quick Actions + Extra / Pados Work */}
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
                   {selectedDayData.orders.length > 0 && (
                     <>
                       <button
@@ -1900,10 +1738,10 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                             'clear'
                           )
                         }
-                        className="px-3 py-1.5 text-xs font-semibold bg-[#128C7E] hover:bg-[#075E54] disabled:opacity-45 text-white rounded-lg inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                        className="px-3 py-1 text-xs font-semibold bg-[#128C7E] hover:bg-[#075E54] disabled:opacity-45 text-white rounded inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        Full Payment Done
+                        Full Done
                       </button>
 
                       <button
@@ -1915,10 +1753,10 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                             'pending'
                           )
                         }
-                        className="px-3 py-1.5 text-xs font-semibold bg-red-50 hover:bg-red-100 disabled:opacity-45 text-red-700 border border-red-200 rounded-lg inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                        className="px-3 py-1 text-xs font-semibold bg-white hover:bg-red-50 disabled:opacity-45 text-red-700 border border-red-200 rounded inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
                       >
                         <Clock className="w-3.5 h-3.5" />
-                        Set All Pending
+                        Set Pending
                       </button>
                     </>
                   )}
@@ -1927,23 +1765,22 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowExtraForm((p) => !p)}
-                  className="px-3 py-1.5 text-xs font-semibold bg-white hover:bg-slate-50 border border-[#DCE4E0] text-slate-800 rounded-lg inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                  className="px-3 py-1 text-xs font-semibold bg-white hover:bg-slate-50 border border-[#DCE4E0] text-slate-800 rounded inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
                 >
                   <Plus className="w-3.5 h-3.5 text-[#128C7E]" />
-                  Add Extra / Pados Work
+                  Extra Work
                 </button>
               </div>
             </div>
 
-            {/* Inline Extra / Pados Work Form inside Popup */}
             {showExtraForm && (
               <form
                 onSubmit={handleAddExtraWorkOnDate}
-                className="p-3.5 bg-[#EFF4F1] border-b border-[#DCE4E0] grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
+                className="p-3 bg-[#EFF4F1] border-b border-[#DCE4E0] grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
               >
                 <div className="sm:col-span-3">
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    100% Work Amount (₹) *
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                    100% Amount (₹) *
                   </label>
                   <input
                     type="number"
@@ -1952,17 +1789,17 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                     value={extraAmountInput}
                     onChange={(e) => setExtraAmountInput(e.target.value)}
                     placeholder="e.g. 1200"
-                    className="w-full px-2.5 py-1.5 text-xs font-mono-num bg-white border border-[#DCE4E0] rounded-lg focus:outline-none focus:border-[#128C7E]"
+                    className="w-full px-2 py-1 text-xs font-mono-num bg-white border border-[#DCE4E0] rounded focus:outline-none focus:border-[#128C7E]"
                   />
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
                     Service
                   </label>
                   <select
                     value={extraService}
                     onChange={(e) => setExtraService(e.target.value)}
-                    className="w-full px-2 py-1.5 text-xs bg-white border border-[#DCE4E0] rounded-lg focus:outline-none focus:border-[#128C7E]"
+                    className="w-full px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded focus:outline-none focus:border-[#128C7E]"
                   >
                     {config.services.map((s) => (
                       <option key={s} value={s}>
@@ -1972,13 +1809,13 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                   </select>
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
                     City
                   </label>
                   <select
                     value={extraCity}
                     onChange={(e) => setExtraCity(e.target.value)}
-                    className="w-full px-2 py-1.5 text-xs bg-white border border-[#DCE4E0] rounded-lg focus:outline-none focus:border-[#128C7E]"
+                    className="w-full px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded focus:outline-none focus:border-[#128C7E]"
                   >
                     {config.cities.map((c) => (
                       <option key={c} value={c}>
@@ -1988,22 +1825,22 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                   </select>
                 </div>
                 <div className="sm:col-span-3">
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    Note / Pados Address
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                    Note / Address
                   </label>
                   <input
                     type="text"
                     value={extraNote}
                     onChange={(e) => setExtraNote(e.target.value)}
-                    placeholder="Pados me extra kaam"
-                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#DCE4E0] rounded-lg focus:outline-none focus:border-[#128C7E]"
+                    placeholder="Extra work note..."
+                    className="w-full px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded focus:outline-none focus:border-[#128C7E]"
                   />
                 </div>
                 <div className="sm:col-span-2">
                   <button
                     type="submit"
                     disabled={savingExtra}
-                    className="w-full py-1.5 px-2.5 bg-[#128C7E] hover:bg-[#075E54] text-white text-xs font-semibold rounded-lg cursor-pointer"
+                    className="w-full py-1 px-2.5 bg-[#128C7E] hover:bg-[#075E54] text-white text-xs font-semibold rounded cursor-pointer"
                   >
                     {savingExtra ? 'Saving...' : 'Save Extra'}
                   </button>
@@ -2014,7 +1851,7 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
             {/* Orders List Inside Popup */}
             <div className="overflow-y-auto flex-1 divide-y divide-[#DCE4E0]">
               {selectedDayData.orders.length === 0 ? (
-                <div className="p-8 text-center text-xs text-slate-500">
+                <div className="p-6 text-center text-xs text-slate-500">
                   No orders on {formatReadableDate(selectedDate)} for {modalVendorInfo.name}.
                 </div>
               ) : (
@@ -2029,32 +1866,36 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                   return (
                     <div
                       key={order.id}
-                      className="px-4 py-3 flex flex-wrap items-center justify-between gap-3 hover:bg-[#FAFDFB]"
+                      className="px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 hover:bg-[#FAFDFB]"
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2 text-xs">
-                          <span className="font-mono-num text-slate-400 font-semibold">
-                            {i + 1}.
-                          </span>
-                          <span className="font-bold text-slate-900">
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-700">
+                          <span className="font-mono-num text-slate-400">{i + 1}.</span>
+                          <span className="font-semibold text-slate-900">
                             {order.name ||
                               (order.isExtraWork ? 'Pados / Extra Work' : order.number)}
                           </span>
                           {order.number && (
-                            <span className="font-mono-num text-slate-600">{order.number}</span>
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-mono-num text-slate-600">{order.number}</span>
+                            </>
                           )}
-                          <span className="px-1.5 py-0.5 rounded bg-[#EFF4F1] text-[#075E54] font-medium text-[11px]">
-                            {order.serviceName}
-                          </span>
+                          <span aria-hidden="true">·</span>
+                          <span className="text-[#075E54] font-medium">{order.serviceName}</span>
                           {order.isExtraWork && (
-                            <span className="px-1.5 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-semibold">
-                              Extra Work
-                            </span>
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="text-blue-700 font-medium">Extra</span>
+                            </>
                           )}
                           {isPartial && (
-                            <span className="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-300 text-amber-900 text-[10px] font-semibold">
-                              ₹{formatRupee(pending)} Baaki (Partial)
-                            </span>
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="text-amber-800 font-semibold">
+                                ₹{formatRupee(pending)} Baaki
+                              </span>
+                            </>
                           )}
                         </div>
                         {(order.address || order.notes || order.paymentNote) && (
@@ -2066,14 +1907,14 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                         )}
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-3 shrink-0">
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
                         <div className="text-right font-mono-num">
                           <div className="text-xs text-slate-700">
                             100%: <strong>₹{formatRupee(workTotal)}</strong> · 30%:{' '}
-                            <strong className="text-amber-900">₹{formatRupee(comm30)}</strong>
+                            <strong className="text-slate-900">₹{formatRupee(comm30)}</strong>
                           </div>
 
-                          <div className="text-[11px] flex items-center justify-end gap-1.5 mt-0.5">
+                          <div className="text-[11px] flex items-center justify-end gap-1.5">
                             {editingPaidId === order.id ? (
                               <input
                                 type="number"
@@ -2138,13 +1979,13 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                           type="button"
                           onClick={() => setInvoiceOrder(order)}
                           title="Generate Company Invoice / Bill"
-                          className="px-2 py-1 text-[11px] font-semibold bg-white hover:bg-slate-50 text-[#075E54] border border-[#DCE4E0] rounded-lg inline-flex items-center gap-1 cursor-pointer"
+                          className="px-2 py-1 text-[11px] font-semibold bg-white hover:bg-slate-50 text-[#075E54] border border-[#DCE4E0] rounded inline-flex items-center gap-1 cursor-pointer"
                         >
                           <FileText className="w-3 h-3" />
                           Bill
                         </button>
 
-                        <div className="inline-flex rounded-lg border border-[#DCE4E0] overflow-hidden">
+                        <div className="inline-flex rounded border border-[#DCE4E0] overflow-hidden">
                           <button
                             type="button"
                             onClick={() => onUpdateOrder(order.id, { paymentStatus: 'clear' })}
@@ -2154,7 +1995,7 @@ export const VendorPayments: React.FC<VendorPaymentsProps> = ({
                                 : 'bg-white text-slate-600 hover:bg-emerald-50'
                             }`}
                           >
-                            Payment Done
+                            Done
                           </button>
                           <button
                             type="button"
