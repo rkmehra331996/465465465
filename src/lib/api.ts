@@ -315,10 +315,15 @@ async function downloadAuthedFile(url: string, fallbackFilename: string): Promis
   const token = getStoredToken();
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  let res = await fetch(toRelativeApiUrl(url), { headers, credentials: 'include' });
+  const reqUrl = toRelativeApiUrl(url);
+  let res = await fetch(reqUrl, { headers, credentials: 'include', cache: 'no-store' });
   const ct = (res.headers.get('content-type') || '').toLowerCase();
   if ((res.status === 404 || ct.includes('text/html')) && url.startsWith('/api/')) {
-    res = await fetch(buildPhpFallbackUrl(url), { headers, credentials: 'include' });
+    res = await fetch(buildPhpFallbackUrl(url), {
+      headers,
+      credentials: 'include',
+      cache: 'no-store',
+    });
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -336,16 +341,25 @@ async function downloadAuthedFile(url: string, fallbackFilename: string): Promis
 }
 
 export async function downloadHostingerPhpScript(): Promise<void> {
-  await downloadAuthedFile('/api/hostinger/php-script', 'orderdesk-sync.php');
+  await downloadAuthedFile(`/api/hostinger/php-script?_t=${Date.now()}`, 'orderdesk-sync.php');
 }
 
 export async function downloadHostingerReadyZip(): Promise<void> {
-  await downloadAuthedFile('/api/hostinger/download-zip', 'orderdesk-hostinger-ready.zip');
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+  await downloadAuthedFile(
+    `/api/hostinger/download-zip?_t=${Date.now()}`,
+    `orderdesk-hostinger-ready-${stamp}.zip`
+  );
 }
 
 export async function downloadFullBackupJson(): Promise<void> {
   const today = new Date().toISOString().slice(0, 10);
-  await downloadAuthedFile('/api/admin/export-backup', `orderdesk-backup-${today}.json`);
+  await downloadAuthedFile(
+    `/api/admin/export-backup?_t=${Date.now()}`,
+    `orderdesk-backup-${today}.json`
+  );
 }
 
 export function getOrderTotal(o: Pick<Order, 'price' | 'extraAmount'>): number {

@@ -126,6 +126,14 @@ export function collectDirectoryZipEntries(dirPath: string, prefix = ''): ZipEnt
 export function buildHostingerHtaccess(): string {
   return `DirectoryIndex index.html index.php
 
+<IfModule mod_headers.c>
+  <FilesMatch "^(index\\.html|api\\.php)$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+  </FilesMatch>
+</IfModule>
+
 RewriteEngine On
 
 # Pass Authorization header through Apache / LiteSpeed CGI

@@ -231,7 +231,9 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [quickDateScope, setQuickDateScope] = useState<'all' | 'not_confirmed'>('all');
-  const [dateSort, setDateSort] = useState<'newest' | 'oldest'>('newest');
+  const [dateSort, setDateSort] = useState<
+    'entry_newest' | 'entry_oldest' | 'booking_newest' | 'booking_oldest'
+  >('entry_newest');
   const [searchQuery, setSearchQuery] = useState('');
   const [cleanerFilter, setCleanerFilter] = useState('all');
   const [cityFilter, setCityFilter] = useState('all');
@@ -364,6 +366,13 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       return true;
     });
 
+    if (dateSort === 'entry_newest') {
+      return list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    }
+    if (dateSort === 'entry_oldest') {
+      return list.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    }
+
     const getValidIsoDate = (o: Order) => {
       const bd = (o.bookingDate || '').trim();
       return /^\d{4}-\d{2}-\d{2}$/.test(bd) ? bd : '';
@@ -375,9 +384,9 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       if (da && !db) return -1;
       if (!da && db) return 1;
       if (da && db && da !== db) {
-        return dateSort === 'newest' ? db.localeCompare(da) : da.localeCompare(db);
+        return dateSort === 'booking_newest' ? db.localeCompare(da) : da.localeCompare(db);
       }
-      return dateSort === 'newest'
+      return dateSort === 'booking_newest'
         ? b.createdAt.localeCompare(a.createdAt)
         : a.createdAt.localeCompare(b.createdAt);
     });
@@ -1178,7 +1187,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
           </select>
 
           {(quickDateScope !== 'all' ||
-            dateSort !== 'newest' ||
+            dateSort !== 'entry_newest' ||
             fromDate ||
             toDate ||
             cleanerFilter !== 'all' ||
@@ -1192,7 +1201,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
               type="button"
               onClick={() => {
                 setQuickDateScope('all');
-                setDateSort('newest');
+                setDateSort('entry_newest');
                 setFromDate('');
                 setToDate('');
                 setCleanerFilter('all');
@@ -1312,16 +1321,24 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
 
           <select
             aria-label="Date sorting"
-            title="Date Sorting"
+            title="Sequence / Date Sorting"
             value={dateSort}
             onChange={(e) => {
-              setDateSort(e.target.value as 'newest' | 'oldest');
+              setDateSort(
+                e.target.value as
+                  | 'entry_newest'
+                  | 'entry_oldest'
+                  | 'booking_newest'
+                  | 'booking_oldest'
+              );
               setCurrentPage(1);
             }}
             className="px-2 py-1 text-xs bg-white border border-[#DCE4E0] rounded text-slate-700 focus:outline-none focus:border-slate-400 shrink-0"
           >
-            <option value="newest">Date: New to Old</option>
-            <option value="oldest">Date: Old to New</option>
+            <option value="entry_newest">Order: New to Old (Fixed)</option>
+            <option value="entry_oldest">Order: Old to New (Fixed)</option>
+            <option value="booking_newest">Booking Date: New to Old</option>
+            <option value="booking_oldest">Booking Date: Old to New</option>
           </select>
 
           <select

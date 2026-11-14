@@ -2006,16 +2006,16 @@ async function ensureDistBuiltForHostinger(): Promise<string> {
   const viteBin = path.resolve(process.cwd(), 'node_modules/vite/bin/vite.js');
   if (fs.existsSync(viteBin)) {
     if (!hostingerBuildPromise) {
-      hostingerBuildPromise = execFileAsync(process.execPath, [viteBin, 'build'], {
-        cwd: process.cwd(),
-        timeout: 90000,
-      })
+      hostingerBuildPromise = execFileAsync(
+        process.execPath,
+        [viteBin, 'build', '--emptyOutDir'],
+        {
+          cwd: process.cwd(),
+          timeout: 120000,
+          maxBuffer: 10 * 1024 * 1024,
+        }
+      )
         .then(() => undefined)
-        .catch((err) => {
-          if (!fs.existsSync(path.join(distDir, 'index.html'))) {
-            throw err;
-          }
-        })
         .finally(() => {
           hostingerBuildPromise = null;
         });
@@ -2032,6 +2032,7 @@ app.get('/api/hostinger/download-zip', requireAuth, requireSuperAdmin, async (_r
   try {
     const distDir = await ensureDistBuiltForHostinger();
     const distEntries = collectDirectoryZipEntries(distDir);
+    const builtAt = new Date().toISOString();
 
     const dbSnapshot: PortalDatabase = {
       ...db,
@@ -2048,11 +2049,18 @@ app.get('/api/hostinger/download-zip', requireAuth, requireSuperAdmin, async (_r
       { name: 'config.php', data: Buffer.from(buildHostingerConfigPhp(), 'utf-8') },
       { name: 'api.php', data: Buffer.from(buildHostingerApiPhp(), 'utf-8') },
       { name: 'database.sql', data: Buffer.from(buildHostingerSqlFile(db.orders), 'utf-8') },
-      { name: 'README-HOSTINGER.txt', data: Buffer.from(buildHostingerReadme(), 'utf-8') },
+      {
+        name: 'README-HOSTINGER.txt',
+        data: Buffer.from(`${buildHostingerReadme()}\nPackage Built At: ${builtAt}\n`, 'utf-8'),
+      },
       { name: 'data/.htaccess', data: Buffer.from(buildHostingerDataHtaccess(), 'utf-8') },
       { name: 'data/portal-db.json', data: Buffer.from(JSON.stringify(dbSnapshot, null, 2), 'utf-8') },
     ]);
 
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Length', String(zipBuffer.length));
     res.setHeader('Content-Disposition', 'attachment; filename="orderdesk-hostinger-ready.zip"');
@@ -2147,8 +2155,17 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(process.cwd(), 'dist');
-    app.use(express.static(distDir));
+    app.use(
+      express.static(distDir, {
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('index.html')) {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+          }
+        },
+      })
+    );
     app.get('/{*path}', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       res.sendFile(path.join(distDir, 'index.html'));
     });
   }
