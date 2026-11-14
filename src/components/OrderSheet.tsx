@@ -4,6 +4,8 @@ import {
   ArrowRightLeft,
   Check,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Download,
   FileText,
@@ -31,14 +33,15 @@ import { IndianDateInput } from './IndianDateInput';
 import { InvoiceModal } from './InvoiceModal';
 import { ServiceEditModal } from './ServiceEditModal';
 import { TransferOrderModal } from './TransferOrderModal';
-import type {
-  BulkImportOrderRow,
-  DuplicateOrderMatch,
-  NewOrderPayload,
-  Order,
-  OrderStatus,
-  PortalConfig,
-  UserPublic,
+import {
+  DRY_CLEAN_ITEMS,
+  type BulkImportOrderRow,
+  type DuplicateOrderMatch,
+  type NewOrderPayload,
+  type Order,
+  type OrderStatus,
+  type PortalConfig,
+  type UserPublic,
 } from '../types';
 
 interface OrderSheetProps {
@@ -84,6 +87,16 @@ function todayStr(offsetDays = 0): string {
   return `${y}-${m}-${day}`;
 }
 
+function shiftIsoDate(isoDate: string, deltaDays: number): string {
+  const base = /^\d{4}-\d{2}-\d{2}$/.test(isoDate) ? isoDate : todayStr(0);
+  const [y, m, d] = base.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + deltaDays);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
 const TANK_TYPES = [
   { key: '500L', label: '500 Ltr' },
   { key: '750L', label: '750 Ltr' },
@@ -120,8 +133,14 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   ]);
   const [newAddress, setNewAddress] = useState('');
   const [serviceQuantities, setServiceQuantities] = useState<Record<string, number>>({});
+  const [servicePrices, setServicePrices] = useState<Record<string, number>>({});
   const [tankCounts, setTankCounts] = useState<Record<string, number>>({});
+  const [tankPrices, setTankPrices] = useState<Record<string, number>>({});
+  const [dryCleanCounts, setDryCleanCounts] = useState<Record<string, number>>({});
+  const [dryCleanPrices, setDryCleanPrices] = useState<Record<string, number>>({});
   const [newPrice, setNewPrice] = useState('');
+  const [newLessPrice, setNewLessPrice] = useState('');
+  const [priceManuallyEdited, setPriceManuallyEdited] = useState(false);
   const [newDate, setNewDate] = useState('');
   const [dateSelectionMode, setDateSelectionMode] = useState<'none' | 'date' | 'not_confirm'>('none');
   const [customDateOpen, setCustomDateOpen] = useState(false);
@@ -426,61 +445,149 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
   const tankSummary = useMemo(() => {
     const parts: string[] = [];
     let totalTanks = 0;
+    let totalPrice = 0;
     for (const t of TANK_TYPES) {
       const cnt = tankCounts[t.key] || 0;
+      const rate = tankPrices[t.key] || 0;
       if (cnt > 0) {
-        parts.push(`${t.label} × ${cnt}`);
+        parts.push(rate > 0 ? `${t.label} × ${cnt} @ ₹${rate}` : `${t.label} × ${cnt}`);
         totalTanks += cnt;
+        if (rate > 0) totalPrice += cnt * rate;
       }
     }
-    return { text: parts.join(', '), totalTanks };
-  }, [tankCounts]);
+    return { text: parts.join(', '), totalTanks, totalPrice };
+  }, [tankCounts, tankPrices]);
 
-  const adjustTankCount = (key: string, delta: number) => {
+  const setTankCountDirect = (key: string, rawVal: string) => {
+    const digits = rawVal.replace(/\D/g, '');
+    const num = digits ? Math.max(0, Math.min(999, Number(digits))) : 0;
     setTankCounts((prev) => {
-      const nextVal = Math.max(0, (prev[key] || 0) + delta);
-      if (nextVal === 0) {
+      if (num === 0) {
+        const copy = { ...prev };
+        delete copy[key];
+        setTankPrices((pPrev) => {
+          if (!(key in pPrev)) return pPrev;
+          const pCopy = { ...pPrev };
+          delete pCopy[key];
+          return pCopy;
+        });
+        return copy;
+      }
+      return { ...prev, [key]: num };
+    });
+  };
+
+  const setTankPriceDirect = (key: string, rawVal: string) => {
+    const digits = rawVal.replace(/\D/g, '');
+    const num = digits ? Math.max(0, Math.min(999999, Number(digits))) : 0;
+    setTankPrices((prev) => {
+      if (num === 0) {
         const copy = { ...prev };
         delete copy[key];
         return copy;
       }
-      return { ...prev, [key]: nextVal };
+      return { ...prev, [key]: num };
+    });
+    if (num > 0) {
+      setTankCounts((prev) => ((prev[key] || 0) === 0 ? { ...prev, [key]: 1 } : prev));
+    }
+  };
+
+  const dryCleanSummary = useMemo(() => {
+    const parts: string[] = [];
+    let totalItems = 0;
+    let totalPrice = 0;
+    for (const item of DRY_CLEAN_ITEMS) {
+      const cnt = dryCleanCounts[item.key] || 0;
+      const rate = dryCleanPrices[item.key] || 0;
+      if (cnt > 0) {
+        parts.push(rate > 0 ? `${item.label} × ${cnt} @ ₹${rate}` : `${item.label} × ${cnt}`);
+        totalItems += cnt;
+        if (rate > 0) totalPrice += cnt * rate;
+      }
+    }
+    return { text: parts.join(', '), totalItems, totalPrice };
+  }, [dryCleanCounts, dryCleanPrices]);
+
+  const setDryCleanCountDirect = (key: string, rawVal: string) => {
+    const digits = rawVal.replace(/\D/g, '');
+    const num = digits ? Math.max(0, Math.min(999, Number(digits))) : 0;
+    setDryCleanCounts((prev) => {
+      if (num === 0) {
+        const copy = { ...prev };
+        delete copy[key];
+        setDryCleanPrices((pPrev) => {
+          if (!(key in pPrev)) return pPrev;
+          const pCopy = { ...pPrev };
+          delete pCopy[key];
+          return pCopy;
+        });
+        return copy;
+      }
+      return { ...prev, [key]: num };
     });
   };
 
+  const setDryCleanPriceDirect = (key: string, rawVal: string) => {
+    const digits = rawVal.replace(/\D/g, '');
+    const num = digits ? Math.max(0, Math.min(999999, Number(digits))) : 0;
+    setDryCleanPrices((prev) => {
+      if (num === 0) {
+        const copy = { ...prev };
+        delete copy[key];
+        return copy;
+      }
+      return { ...prev, [key]: num };
+    });
+    if (num > 0) {
+      setDryCleanCounts((prev) => ((prev[key] || 0) === 0 ? { ...prev, [key]: 1 } : prev));
+    }
+  };
+
   const selectedNonTankServices = useMemo(
-    () => newServices.filter((s) => s.toLowerCase() !== 'water tank'),
+    () =>
+      newServices.filter(
+        (s) => s.toLowerCase() !== 'water tank' && s.toLowerCase() !== 'dry clean'
+      ),
     [newServices]
   );
 
   const serviceQtySummary = useMemo(() => {
     const parts: string[] = [];
     let totalQty = 0;
+    let totalPrice = 0;
     for (const s of selectedNonTankServices) {
       const q = serviceQuantities[s] || 0;
+      const rate = servicePrices[s] || 0;
       if (q > 0) {
         totalQty += q;
+        if (rate > 0) totalPrice += q * rate;
+        const priceSuffix = rate > 0 ? ` @ ₹${rate}` : '';
         if (s.toLowerCase() === 'sofa') {
-          parts.push(`Sofa: ${q} ${q === 1 ? 'Seat' : 'Seats'}`);
+          parts.push(`${s}: ${q} ${q === 1 ? 'Seat' : 'Seats'}${priceSuffix}`);
         } else {
-          parts.push(`${s}: ${q}`);
+          parts.push(`${s}: ${q}${priceSuffix}`);
         }
       }
     }
-    return { text: parts.join(', '), totalQty };
-  }, [selectedNonTankServices, serviceQuantities]);
+    return { text: parts.join(', '), totalQty, totalPrice };
+  }, [selectedNonTankServices, serviceQuantities, servicePrices]);
 
-  const adjustServiceQty = (service: string, delta: number) => {
-    setServiceQuantities((prev) => {
-      const nextVal = Math.max(0, (prev[service] || 0) + delta);
-      if (nextVal === 0) {
-        const copy = { ...prev };
-        delete copy[service];
-        return copy;
-      }
-      return { ...prev, [service]: nextVal };
-    });
-  };
+  const autoCalculatedTotal = useMemo(() => {
+    const hasWaterTank = newServices.some((s) => s.toLowerCase() === 'water tank');
+    const hasDryClean = newServices.some((s) => s.toLowerCase() === 'dry clean');
+    return (
+      (hasWaterTank ? tankSummary.totalPrice : 0) +
+      (hasDryClean ? dryCleanSummary.totalPrice : 0) +
+      serviceQtySummary.totalPrice
+    );
+  }, [newServices, tankSummary.totalPrice, dryCleanSummary.totalPrice, serviceQtySummary.totalPrice]);
+
+  useEffect(() => {
+    if (!priceManuallyEdited) {
+      setNewPrice(autoCalculatedTotal > 0 ? String(autoCalculatedTotal) : '');
+    }
+  }, [autoCalculatedTotal, priceManuallyEdited]);
 
   const setServiceQtyDirect = (service: string, rawVal: string) => {
     const digits = rawVal.replace(/\D/g, '');
@@ -489,10 +596,32 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       if (num === 0) {
         const copy = { ...prev };
         delete copy[service];
+        setServicePrices((pPrev) => {
+          if (!(service in pPrev)) return pPrev;
+          const pCopy = { ...pPrev };
+          delete pCopy[service];
+          return pCopy;
+        });
         return copy;
       }
       return { ...prev, [service]: num };
     });
+  };
+
+  const setServicePriceDirect = (service: string, rawVal: string) => {
+    const digits = rawVal.replace(/\D/g, '');
+    const num = digits ? Math.max(0, Math.min(999999, Number(digits))) : 0;
+    setServicePrices((prev) => {
+      if (num === 0) {
+        const copy = { ...prev };
+        delete copy[service];
+        return copy;
+      }
+      return { ...prev, [service]: num };
+    });
+    if (num > 0) {
+      setServiceQuantities((prev) => ((prev[service] || 0) === 0 ? { ...prev, [service]: 1 } : prev));
+    }
   };
 
   const toggleNewService = (service: string) => {
@@ -502,10 +631,20 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
         if (prev.length === 1) return prev;
         if (service.toLowerCase() === 'water tank') {
           setTankCounts({});
+          setTankPrices({});
+        } else if (service.toLowerCase() === 'dry clean') {
+          setDryCleanCounts({});
+          setDryCleanPrices({});
         } else {
           setServiceQuantities((qPrev) => {
             if (!(service in qPrev)) return qPrev;
             const copy = { ...qPrev };
+            delete copy[service];
+            return copy;
+          });
+          setServicePrices((pPrev) => {
+            if (!(service in pPrev)) return pPrev;
+            const copy = { ...pPrev };
             delete copy[service];
             return copy;
           });
@@ -523,14 +662,22 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
     setAdding(true);
     try {
       const hasWaterTank = newServices.some((s) => s.toLowerCase() === 'water tank');
+      const hasDryClean = newServices.some((s) => s.toLowerCase() === 'dry clean');
       const tankQtyVal = hasWaterTank ? tankSummary.totalTanks : 0;
+      const dryCleanQtyVal = hasDryClean ? dryCleanSummary.totalItems : 0;
       const otherQtyVal = serviceQtySummary.totalQty;
-      const combinedQty = tankQtyVal + otherQtyVal;
+      const combinedQty = tankQtyVal + dryCleanQtyVal + otherQtyVal;
       const finalQty = combinedQty > 0 ? combinedQty : null;
+
+      const grossTotal = Math.max(0, Number(newPrice) || 0);
+      const lessAmount = Math.max(0, Number(newLessPrice) || 0);
+      const netFinalPrice = Math.max(0, grossTotal - lessAmount);
 
       const noteParts = [
         hasWaterTank && tankSummary.text ? tankSummary.text : '',
+        hasDryClean && dryCleanSummary.text ? dryCleanSummary.text : '',
         serviceQtySummary.text ? serviceQtySummary.text : '',
+        lessAmount > 0 ? `Less: ₹${lessAmount}` : '',
         newNotes.trim(),
       ].filter(Boolean);
 
@@ -548,7 +695,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
         city: newCity,
         address: newAddress.trim(),
         qty: finalQty,
-        price: Math.max(0, Number(newPrice) || 0),
+        price: netFinalPrice,
         cleanerName: newCleaner,
         notes: noteParts.length > 0 ? noteParts.join(' | ') : undefined,
       });
@@ -559,8 +706,14 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
       setNewServices([config.services[0] || 'Water tank']);
       setNewAddress('');
       setServiceQuantities({});
+      setServicePrices({});
       setTankCounts({});
+      setTankPrices({});
+      setDryCleanCounts({});
+      setDryCleanPrices({});
       setNewPrice('');
+      setNewLessPrice('');
+      setPriceManuallyEdited(false);
       setNewDate('');
       setDateSelectionMode('none');
       setCustomDateOpen(false);
@@ -794,6 +947,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
     (mode === 'completed' ? 2 : 0);
 
   const hasWaterTankSelected = newServices.some((s) => s.toLowerCase() === 'water tank');
+  const hasDryCleanSelected = newServices.some((s) => s.toLowerCase() === 'dry clean');
   const hasOtherServiceSelected = selectedNonTankServices.length > 0;
 
   return (
@@ -863,8 +1017,80 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
           )}
         </div>
 
-        {/* Right: Inline Date-to-Date, Service, City, Cleaners, Import & Export */}
+        {/* Right: Back Date / Today / Next Date + Date-to-Date, Service, City, Cleaners, Import & Export */}
         <div className="flex items-center gap-1.5 overflow-x-auto sheet-scroll flex-nowrap min-w-0">
+          {mode === 'active' && (() => {
+            const today = todayStr(0);
+            const yesterday = todayStr(-1);
+            const tomorrow = todayStr(1);
+            const isSingleDay = Boolean(fromDate) && fromDate === toDate;
+            const backDateTarget = isSingleDay ? shiftIsoDate(fromDate, -1) : yesterday;
+            const nextDateTarget = isSingleDay ? shiftIsoDate(fromDate, 1) : tomorrow;
+            const backDay = backDateTarget.slice(8, 10);
+            const todayDay = today.slice(8, 10);
+            const nextDay = nextDateTarget.slice(8, 10);
+            const isBackActive = isSingleDay && fromDate < today;
+            const isTodayActive = fromDate === today && toDate === today;
+            const isNextActive = isSingleDay && fromDate > today;
+
+            return (
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFromDate(backDateTarget);
+                    setToDate(backDateTarget);
+                    setCurrentPage(1);
+                  }}
+                  title={`Back to ${formatIndianDate(backDateTarget)}`}
+                  className={`px-2 py-1 text-xs font-semibold rounded border inline-flex items-center gap-0.5 cursor-pointer whitespace-nowrap transition-colors ${
+                    isBackActive
+                      ? 'bg-[#075E54] text-white border-[#075E54]'
+                      : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                  }`}
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  Back Date ({backDay})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFromDate(today);
+                    setToDate(today);
+                    setCurrentPage(1);
+                  }}
+                  title={`Today (${formatIndianDate(today)})`}
+                  className={`px-2.5 py-1 text-xs font-semibold rounded border cursor-pointer whitespace-nowrap transition-colors ${
+                    isTodayActive
+                      ? 'bg-purple-800 text-white border-purple-900 ring-2 ring-purple-300'
+                      : 'bg-purple-600 text-white border-purple-700 hover:bg-purple-700'
+                  }`}
+                >
+                  Today ({todayDay})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFromDate(nextDateTarget);
+                    setToDate(nextDateTarget);
+                    setCurrentPage(1);
+                  }}
+                  title={`Next to ${formatIndianDate(nextDateTarget)}`}
+                  className={`px-2 py-1 text-xs font-semibold rounded border inline-flex items-center gap-0.5 cursor-pointer whitespace-nowrap transition-colors ${
+                    isNextActive
+                      ? 'bg-[#075E54] text-white border-[#075E54]'
+                      : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                  }`}
+                >
+                  Next Date ({nextDay})
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            );
+          })()}
+
           <div className="flex items-center gap-1 text-xs text-slate-600 shrink-0">
             <IndianDateInput
               ariaLabel="From date"
@@ -2033,7 +2259,7 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
               <div>
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                   <label className="text-xs font-semibold text-slate-700">
-                    Services (Click to select 1 or multiple — e.g. Water tank + Sofa)
+                    Services (Click to select 1 or multiple — e.g. Water tank + Dry clean)
                   </label>
                   <span className="text-xs font-semibold text-[#075E54]">
                     Selected: {newServices.join(' + ')}
@@ -2178,49 +2404,72 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                 </div>
               </div>
 
-              {/* Row 3 (Water Tank Sizes in 6-col horizontal row when Water tank is selected) */}
+              {/* Row 3 (Water Tank Sizes with Qty & Manual Price when Water tank is selected) */}
               {hasWaterTankSelected && (
                 <div>
-                  <div className="flex items-center justify-between mb-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                     <label className="text-xs font-semibold text-slate-700">
-                      Water Tank Quantity (Size & Count)
+                      Water Tank Quantity &amp; Manual Price (₹/unit)
                     </label>
                     {tankSummary.totalTanks > 0 && (
                       <span className="text-xs text-[#075E54] font-semibold">
-                        Selected ({tankSummary.totalTanks}): {tankSummary.text}
+                        Selected ({tankSummary.totalTanks}
+                        {tankSummary.totalPrice > 0
+                          ? ` · ₹${tankSummary.totalPrice.toLocaleString('en-IN')}`
+                          : ''}
+                        ): {tankSummary.text}
                       </span>
                     )}
                   </div>
                   <div className="bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg p-2">
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                       {TANK_TYPES.map((t) => {
                         const count = tankCounts[t.key] || 0;
+                        const rate = tankPrices[t.key] || 0;
+                        const lineTotal = count * rate;
                         return (
                           <div
                             key={t.key}
-                            className={`flex items-center justify-between px-2 py-1.5 rounded border text-xs ${
-                              count > 0
+                            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded border text-xs ${
+                              count > 0 || rate > 0
                                 ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold'
                                 : 'bg-white border-[#DCE4E0] text-slate-700'
                             }`}
                           >
-                            <span className="truncate mr-1">{t.label}</span>
+                            <div className="min-w-0">
+                              <div className="truncate">{t.label}</div>
+                              {lineTotal > 0 && (
+                                <div className="text-[10px] font-mono-num text-[#128C7E]">
+                                  = ₹{lineTotal.toLocaleString('en-IN')}
+                                </div>
+                              )}
+                            </div>
                             <div className="flex items-center gap-1 shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => adjustTankCount(t.key, -1)}
-                                className="w-5 h-5 rounded bg-[#EFF4F1] hover:bg-[#DCE4E0] text-slate-700 font-bold flex items-center justify-center cursor-pointer"
-                              >
-                                -
-                              </button>
-                              <span className="w-4 text-center font-mono-num">{count}</span>
-                              <button
-                                type="button"
-                                onClick={() => adjustTankCount(t.key, 1)}
-                                className="w-5 h-5 rounded bg-[#128C7E] hover:bg-[#075E54] text-white font-bold flex items-center justify-center cursor-pointer"
-                              >
-                                +
-                              </button>
+                              <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
+                                <span className="text-[10px] text-slate-400 mr-1">Qty</span>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={count > 0 ? String(count) : ''}
+                                  onChange={(e) => setTankCountDirect(t.key, e.target.value)}
+                                  placeholder="0"
+                                  aria-label={`${t.label} qty`}
+                                  className="w-8 text-center font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
+                                />
+                              </div>
+                              <span className="text-[10px] text-slate-400">×</span>
+                              <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
+                                <span className="text-[10px] text-slate-400 mr-0.5">₹</span>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={rate > 0 ? String(rate) : ''}
+                                  onChange={(e) => setTankPriceDirect(t.key, e.target.value)}
+                                  placeholder="Price"
+                                  aria-label={`${t.label} manual price`}
+                                  className="w-14 text-right font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
+                                />
+                              </div>
                             </div>
                           </div>
                         );
@@ -2230,16 +2479,95 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                 </div>
               )}
 
-              {/* Row 3B (Per-Service Quantity / Sofa Seats when Chimney, Bathroom, Kitchen, Sofa, etc. are selected) */}
+              {/* Row 3A (Dry Clean Items with Qty & Manual Price when Dry clean is selected) */}
+              {hasDryCleanSelected && (
+                <div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                    <label className="text-xs font-semibold text-slate-700">
+                      Dry Clean Items (Qty &amp; Manual Price ₹/unit)
+                    </label>
+                    {dryCleanSummary.totalItems > 0 && (
+                      <span className="text-xs text-[#075E54] font-semibold">
+                        Selected ({dryCleanSummary.totalItems}
+                        {dryCleanSummary.totalPrice > 0
+                          ? ` · ₹${dryCleanSummary.totalPrice.toLocaleString('en-IN')}`
+                          : ''}
+                        ): {dryCleanSummary.text}
+                      </span>
+                    )}
+                  </div>
+                  <div className="bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg p-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                      {DRY_CLEAN_ITEMS.map((item) => {
+                        const count = dryCleanCounts[item.key] || 0;
+                        const rate = dryCleanPrices[item.key] || 0;
+                        const lineTotal = count * rate;
+                        return (
+                          <div
+                            key={item.key}
+                            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded border text-xs ${
+                              count > 0 || rate > 0
+                                ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold'
+                                : 'bg-white border-[#DCE4E0] text-slate-700'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate">{item.label}</div>
+                              {lineTotal > 0 && (
+                                <div className="text-[10px] font-mono-num text-[#128C7E]">
+                                  = ₹{lineTotal.toLocaleString('en-IN')}
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
+                                <span className="text-[10px] text-slate-400 mr-1">Qty</span>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={count > 0 ? String(count) : ''}
+                                  onChange={(e) => setDryCleanCountDirect(item.key, e.target.value)}
+                                  placeholder="0"
+                                  aria-label={`${item.label} qty`}
+                                  className="w-8 text-center font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
+                                />
+                              </div>
+                              <span className="text-[10px] text-slate-400">×</span>
+                              <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
+                                <span className="text-[10px] text-slate-400 mr-0.5">₹</span>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={rate > 0 ? String(rate) : ''}
+                                  onChange={(e) => setDryCleanPriceDirect(item.key, e.target.value)}
+                                  placeholder="Price"
+                                  aria-label={`${item.label} manual price`}
+                                  className="w-14 text-right font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Row 3B (Per-Service Quantity & Manual Price when Chimney, Bathroom, Kitchen, etc. are selected) */}
               {hasOtherServiceSelected && (
                 <div>
-                  <div className="flex items-center justify-between mb-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                     <label className="text-xs font-semibold text-slate-700">
-                      Service Quantities &amp; Sofa Seats
+                      Service Quantities &amp; Manual Price (₹/unit)
                     </label>
                     {serviceQtySummary.totalQty > 0 && (
                       <span className="text-xs text-[#075E54] font-semibold">
-                        Selected: {serviceQtySummary.text}
+                        Selected
+                        {serviceQtySummary.totalPrice > 0
+                          ? ` (₹${serviceQtySummary.totalPrice.toLocaleString('en-IN')})`
+                          : ''}
+                        : {serviceQtySummary.text}
                       </span>
                     )}
                   </div>
@@ -2247,44 +2575,55 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                       {selectedNonTankServices.map((s) => {
                         const qtyVal = serviceQuantities[s] || 0;
-                        const isSofa = s.toLowerCase() === 'sofa';
-                        const unitLabel = isSofa ? `${s} (Seats)` : `${s} (Qty)`;
+                        const rate = servicePrices[s] || 0;
+                        const lineTotal = qtyVal * rate;
+                        const isSeats = s.toLowerCase() === 'sofa';
+                        const unitLabel = isSeats ? `${s} (Seats)` : s;
                         return (
                           <div
                             key={s}
-                            className={`flex items-center justify-between px-2.5 py-1.5 rounded border text-xs ${
-                              qtyVal > 0
+                            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded border text-xs ${
+                              qtyVal > 0 || rate > 0
                                 ? 'bg-white border-[#128C7E] text-[#075E54] font-semibold'
                                 : 'bg-white border-[#DCE4E0] text-slate-700'
                             }`}
                           >
-                            <span className="truncate mr-2">{unitLabel}</span>
+                            <div className="min-w-0">
+                              <div className="truncate">{unitLabel}</div>
+                              {lineTotal > 0 && (
+                                <div className="text-[10px] font-mono-num text-[#128C7E]">
+                                  = ₹{lineTotal.toLocaleString('en-IN')}
+                                </div>
+                              )}
+                            </div>
                             <div className="flex items-center gap-1 shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => adjustServiceQty(s, -1)}
-                                className="w-5 h-5 rounded bg-[#EFF4F1] hover:bg-[#DCE4E0] text-slate-700 font-bold flex items-center justify-center cursor-pointer"
-                                title={`Decrease ${unitLabel}`}
-                              >
-                                -
-                              </button>
-                              <input
-                                type="text"
-                                inputMode="numeric"
-                                value={qtyVal > 0 ? String(qtyVal) : ''}
-                                onChange={(e) => setServiceQtyDirect(s, e.target.value)}
-                                placeholder={isSofa ? 'Seats' : 'Qty'}
-                                aria-label={unitLabel}
-                                className="w-11 text-center font-mono-num text-xs py-0.5 border border-[#DCE4E0] rounded bg-[#F7F9F8] focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => adjustServiceQty(s, 1)}
-                                className="w-5 h-5 rounded bg-[#128C7E] hover:bg-[#075E54] text-white font-bold flex items-center justify-center cursor-pointer"
-                                title={`Increase ${unitLabel}`}
-                              >
-                                +
-                              </button>
+                              <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
+                                <span className="text-[10px] text-slate-400 mr-1">
+                                  {isSeats ? 'Seats' : 'Qty'}
+                                </span>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={qtyVal > 0 ? String(qtyVal) : ''}
+                                  onChange={(e) => setServiceQtyDirect(s, e.target.value)}
+                                  placeholder="0"
+                                  aria-label={`${unitLabel} qty`}
+                                  className="w-8 text-center font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
+                                />
+                              </div>
+                              <span className="text-[10px] text-slate-400">×</span>
+                              <div className="flex items-center border border-[#DCE4E0] rounded bg-[#F7F9F8] px-1.5 focus-within:bg-white focus-within:border-[#128C7E]">
+                                <span className="text-[10px] text-slate-400 mr-0.5">₹</span>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={rate > 0 ? String(rate) : ''}
+                                  onChange={(e) => setServicePriceDirect(s, e.target.value)}
+                                  placeholder="Price"
+                                  aria-label={`${unitLabel} manual price`}
+                                  className="w-14 text-right font-mono-num text-xs py-0.5 bg-transparent focus:outline-none text-slate-800"
+                                />
+                              </div>
                             </div>
                           </div>
                         );
@@ -2294,23 +2633,86 @@ export const OrderSheet: React.FC<OrderSheetProps> = ({
                 </div>
               )}
 
-              {/* Row 4: Price (₹) | Assign Cleaner | Inline Indian Booking Date */}
+              {/* Row 4: Total Price + Less Price (₹) | Assign Cleaner | Inline Indian Booking Date */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-start">
-                <div className="lg:col-span-3">
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Price (₹)
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={newPrice}
-                    onChange={(e) => setNewPrice(e.target.value)}
-                    placeholder="Total Amount"
-                    className="w-full px-3 py-1.5 text-sm font-mono-num bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
-                  />
+                <div className="lg:col-span-4 space-y-1.5">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="flex items-center justify-between gap-1 mb-1">
+                        <label className="text-xs font-semibold text-slate-700">
+                          Total Price (₹)
+                        </label>
+                        {autoCalculatedTotal > 0 && (
+                          priceManuallyEdited && Number(newPrice) !== autoCalculatedTotal ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPriceManuallyEdited(false);
+                                setNewPrice(String(autoCalculatedTotal));
+                              }}
+                              className="text-[10px] font-semibold text-[#128C7E] hover:underline cursor-pointer"
+                            >
+                              Use ₹{autoCalculatedTotal.toLocaleString('en-IN')}
+                            </button>
+                          ) : (
+                            <span className="text-[10px] font-semibold text-[#075E54]">
+                              Auto Sum
+                            </span>
+                          )
+                        )}
+                      </div>
+                      <input
+                        type="number"
+                        min={0}
+                        value={newPrice}
+                        onChange={(e) => {
+                          setPriceManuallyEdited(true);
+                          setNewPrice(e.target.value);
+                        }}
+                        placeholder="Total Amount"
+                        className="w-full px-2.5 py-1.5 text-sm font-mono-num bg-[#F7F9F8] border border-[#DCE4E0] rounded-lg focus:bg-white focus:outline-none focus:border-[#128C7E]"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between gap-1 mb-1">
+                        <label className="text-xs font-semibold text-slate-700">
+                          Less Price (₹)
+                        </label>
+                      </div>
+                      <div className="flex items-center bg-[#FFF8F6] border border-[#F3D0C8] rounded-lg px-2 focus-within:bg-white focus-within:border-red-400">
+                        <span className="text-xs font-bold text-red-500 mr-1">- ₹</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={newLessPrice}
+                          onChange={(e) => setNewLessPrice(e.target.value)}
+                          placeholder="0"
+                          aria-label="Less Price"
+                          className="w-full py-1.5 text-sm font-mono-num bg-transparent focus:outline-none text-slate-800"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {Number(newLessPrice) > 0 && (() => {
+                    const gross = Math.max(0, Number(newPrice) || 0);
+                    const less = Math.max(0, Number(newLessPrice) || 0);
+                    const finalAmt = Math.max(0, gross - less);
+                    return (
+                      <div className="px-2.5 py-1 rounded bg-[#E9F7F0] border border-[#BFE6D1] flex items-center justify-between gap-2 text-[11px] font-mono-num">
+                        <span className="text-slate-600">
+                          ₹{gross.toLocaleString('en-IN')} - ₹{less.toLocaleString('en-IN')}
+                        </span>
+                        <span className="font-bold text-[#075E54]">
+                          = ₹{finalAmt.toLocaleString('en-IN')}
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
 
-                <div className="lg:col-span-3">
+                <div className="lg:col-span-2">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Assign Cleaner
                   </label>

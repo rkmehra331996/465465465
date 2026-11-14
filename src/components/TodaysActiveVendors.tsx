@@ -1,9 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRightLeft,
+  Calendar,
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Copy,
   FileText,
@@ -61,6 +64,48 @@ function dateOffsetStr(offsetDays = 0): string {
   return `${y}-${m}-${day}`;
 }
 
+function shiftIsoDate(isoDate: string, deltaDays: number): string {
+  const base = /^\d{4}-\d{2}-\d{2}$/.test(isoDate) ? isoDate : dateOffsetStr(0);
+  const [y, m, d] = base.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + deltaDays);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function buildMonthCells(year: number, month: number): Array<{ day: number; dateStr: string } | null> {
+  const firstDayOfWeek = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells: Array<{ day: number; dateStr: string } | null> = [];
+  for (let i = 0; i < firstDayOfWeek; i++) {
+    cells.push(null);
+  }
+  const mm = String(month + 1).padStart(2, '0');
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dd = String(d).padStart(2, '0');
+    cells.push({ day: d, dateStr: `${year}-${mm}-${dd}` });
+  }
+  return cells;
+}
+
 function formatSingleOrderForWhatsApp(order: Order, indexNumber = 1): string {
   const serial = toOrderNumberEmoji(indexNumber);
   const total = getOrderTotal(order);
@@ -101,6 +146,72 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
   const [statusMode, setStatusMode] = useState<'all' | 'active' | 'completed'>('all');
   const [collapsedVendors, setCollapsedVendors] = useState<Record<string, boolean>>({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // Calendar popover state for filter bar
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [calendarYear, setCalendarYear] = useState<number>(() => new Date().getFullYear());
+  const [calendarMonth, setCalendarMonth] = useState<number>(() => new Date().getMonth());
+  const calendarRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!calendarOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (calendarRef.current && !calendarRef.current.contains(e.target as Node)) {
+        setCalendarOpen(false);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCalendarOpen(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [calendarOpen]);
+
+  const dateOrderCounts = useMemo(() => {
+    const map = new Map<string, { total: number; active: number; completed: number }>();
+    for (const o of orders) {
+      if (!o.bookingDate || !o.bookingDate.trim()) continue;
+      if (statusMode === 'active' && o.status !== 'active') continue;
+      if (statusMode === 'completed' && o.status !== 'completed') continue;
+      if (
+        cleanerFilter !== 'all' &&
+        (o.cleanerName || '').trim().toLowerCase() !== cleanerFilter.toLowerCase()
+      ) {
+        continue;
+      }
+      const key = o.bookingDate.trim();
+      const entry = map.get(key) || { total: 0, active: 0, completed: 0 };
+      entry.total += 1;
+      if (o.status === 'active') entry.active += 1;
+      else entry.completed += 1;
+      map.set(key, entry);
+    }
+    return map;
+  }, [orders, cleanerFilter, statusMode]);
+
+  const calendarCells = useMemo(
+    () => buildMonthCells(calendarYear, calendarMonth),
+    [calendarYear, calendarMonth]
+  );
+
+  const changeCalendarMonth = (delta: number) => {
+    const d = new Date(calendarYear, calendarMonth + delta, 1);
+    setCalendarYear(d.getFullYear());
+    setCalendarMonth(d.getMonth());
+  };
+
+  const openCalendar = () => {
+    const refDate =
+      selectedDate && /^\d{4}-\d{2}-\d{2}$/.test(selectedDate) ? selectedDate : today;
+    const [y, m] = refDate.split('-').map(Number);
+    setCalendarYear(y);
+    setCalendarMonth(m - 1);
+    setCalendarOpen((prev) => !prev);
+  };
 
   // Inline cell editing state
   const [editingCell, setEditingCell] = useState<{ id: string; field: InlineField } | null>(null);
@@ -310,26 +421,211 @@ export const TodaysActiveVendors: React.FC<TodaysActiveVendorsProps> = ({
       {/* Clean Flat Filter Bar: Today + Date, Cleaner, All (Processing + Complete) */}
       <div className="flex flex-wrap items-center justify-between gap-2 py-2 border-y border-[#DCE4E0]">
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setSelectedDate(today)}
-            className={`px-3 py-1 text-xs font-semibold rounded border cursor-pointer whitespace-nowrap ${
-              selectedDate === today
-                ? 'bg-red-600 text-white border-red-600'
-                : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-slate-50'
-            }`}
-          >
-            Today
-          </button>
+          {(() => {
+            const yesterday = dateOffsetStr(-1);
+            const backDateTarget = selectedDate ? shiftIsoDate(selectedDate, -1) : yesterday;
+            const nextDateTarget = selectedDate ? shiftIsoDate(selectedDate, 1) : tomorrow;
+            const backDay = backDateTarget.slice(8, 10);
+            const todayDay = today.slice(8, 10);
+            const nextDay = nextDateTarget.slice(8, 10);
 
-          <IndianDateInput
-            ariaLabel="Filter by date"
-            title="Select Booking Date (DD/MM/YY)"
-            value={selectedDate}
-            onChange={setSelectedDate}
-            allowClear
-            className="min-w-[106px]"
-          />
+            return (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setSelectedDate(backDateTarget)}
+                  title={`Back to ${formatIndianDate(backDateTarget)}`}
+                  className={`px-2.5 py-1 text-xs font-semibold rounded border inline-flex items-center gap-0.5 cursor-pointer whitespace-nowrap transition-colors ${
+                    selectedDate && selectedDate < today
+                      ? 'bg-[#075E54] text-white border-[#075E54]'
+                      : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                  }`}
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  Back Date ({backDay})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedDate(today)}
+                  title={`Today (${formatIndianDate(today)})`}
+                  className={`px-3 py-1 text-xs font-semibold rounded border inline-flex items-center gap-1 cursor-pointer whitespace-nowrap transition-colors ${
+                    selectedDate === today
+                      ? 'bg-purple-700 text-white border-purple-950 ring-2 ring-purple-300 shadow-sm'
+                      : 'bg-purple-600 text-white border-purple-700 hover:bg-purple-700 opacity-85 hover:opacity-100'
+                  }`}
+                >
+                  {selectedDate === today && <Check className="w-3.5 h-3.5" />}
+                  Today ({todayDay})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedDate(nextDateTarget)}
+                  title={`Next to ${formatIndianDate(nextDateTarget)}`}
+                  className={`px-2.5 py-1 text-xs font-semibold rounded border inline-flex items-center gap-0.5 cursor-pointer whitespace-nowrap transition-colors ${
+                    selectedDate && selectedDate > today
+                      ? 'bg-[#075E54] text-white border-[#075E54]'
+                      : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                  }`}
+                >
+                  Next Date ({nextDay})
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            );
+          })()}
+
+          <div ref={calendarRef} className="relative">
+            <div className="inline-flex items-center bg-white border border-[#DCE4E0] rounded hover:border-slate-400">
+              <button
+                type="button"
+                onClick={openCalendar}
+                aria-label="Open order dates calendar"
+                title="Calendar — click to view dates with orders"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono-num font-medium text-slate-700 cursor-pointer whitespace-nowrap"
+              >
+                <Calendar className="w-3.5 h-3.5 text-[#075E54]" />
+                <span>{selectedDate ? formatIndianDate(selectedDate) : 'All Dates'}</span>
+              </button>
+              {selectedDate && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedDate('');
+                    setCalendarOpen(false);
+                  }}
+                  aria-label="Clear date filter"
+                  title="Show all dates"
+                  className="pr-1.5 pl-0.5 py-1 text-slate-400 hover:text-red-600 cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+
+            {calendarOpen && (
+              <div className="absolute left-0 top-full mt-1.5 z-40 w-[300px] sm:w-[320px] bg-white border border-[#DCE4E0] rounded-xl shadow-xl p-3 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => changeCalendarMonth(-1)}
+                    aria-label="Previous month"
+                    className="p-1 bg-[#F7F9F8] hover:bg-[#EFF4F1] border border-[#DCE4E0] rounded cursor-pointer"
+                  >
+                    <ChevronLeft className="w-4 h-4 text-slate-700" />
+                  </button>
+                  <div className="text-xs font-bold text-slate-900">
+                    {MONTH_NAMES[calendarMonth]} {calendarYear}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => changeCalendarMonth(1)}
+                    aria-label="Next month"
+                    className="p-1 bg-[#F7F9F8] hover:bg-[#EFF4F1] border border-[#DCE4E0] rounded cursor-pointer"
+                  >
+                    <ChevronRight className="w-4 h-4 text-slate-700" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1">
+                  {WEEKDAYS.map((wd) => (
+                    <div
+                      key={wd}
+                      className="text-center text-[10px] font-semibold text-slate-400 uppercase py-0.5"
+                    >
+                      {wd}
+                    </div>
+                  ))}
+
+                  {calendarCells.map((cell, idx) => {
+                    if (!cell) {
+                      return <div key={`cal-empty-${idx}`} className="h-10 rounded bg-[#FAFDFB]" />;
+                    }
+                    const info = dateOrderCounts.get(cell.dateStr);
+                    const hasOrders = Boolean(info && info.total > 0);
+                    const isSelected = selectedDate === cell.dateStr;
+                    const isTodayCell = cell.dateStr === today;
+
+                    return (
+                      <button
+                        key={cell.dateStr}
+                        type="button"
+                        onClick={() => {
+                          setSelectedDate(cell.dateStr);
+                          setCalendarOpen(false);
+                        }}
+                        title={
+                          hasOrders && info
+                            ? `${formatIndianDate(cell.dateStr)} — ${info.total} order(s)`
+                            : formatIndianDate(cell.dateStr)
+                        }
+                        className={`h-10 rounded-md border flex flex-col items-center justify-center relative transition-colors cursor-pointer ${
+                          isSelected
+                            ? 'bg-purple-700 text-white border-purple-900 ring-2 ring-purple-300 font-bold'
+                            : hasOrders
+                            ? 'bg-emerald-50 border-emerald-400 text-[#075E54] hover:bg-emerald-100 font-bold'
+                            : isTodayCell
+                            ? 'bg-purple-50 border-purple-300 text-purple-800 hover:bg-purple-100 font-semibold'
+                            : 'bg-white border-[#E4EBE7] text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className="text-[11px] font-mono-num leading-none">
+                          {cell.day}
+                        </span>
+                        {hasOrders && info && (
+                          <span
+                            className={`mt-0.5 px-1 rounded text-[9px] font-mono-num font-bold leading-tight ${
+                              isSelected
+                                ? 'bg-white text-purple-800'
+                                : 'bg-[#075E54] text-white'
+                            }`}
+                          >
+                            {info.total}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="pt-2 border-t border-[#DCE4E0] flex items-center justify-between gap-2 text-[10px]">
+                  <div className="flex items-center gap-2 text-slate-600">
+                    <span className="inline-flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded bg-emerald-100 border border-emerald-500 inline-block" />
+                      Order Marked
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded bg-purple-700 inline-block" />
+                      Selected
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedDate(today);
+                        setCalendarOpen(false);
+                      }}
+                      className="px-2 py-0.5 rounded bg-purple-600 hover:bg-purple-700 text-white font-semibold cursor-pointer"
+                    >
+                      Today
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedDate('');
+                        setCalendarOpen(false);
+                      }}
+                      className="px-2 py-0.5 rounded bg-[#F7F9F8] hover:bg-[#EFF4F1] border border-[#DCE4E0] text-slate-700 font-semibold cursor-pointer"
+                    >
+                      All
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
 
           <select
             aria-label="Filter by cleaner"

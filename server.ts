@@ -99,7 +99,7 @@ interface PortalDatabase {
 
 const DEFAULT_SERVICES = [
   'Water tank',
-  'Sofa',
+  'Dry clean',
   'Chimney',
   'Kitchen',
   'Home cleaning',

@@ -14,11 +14,22 @@ export type PaymentStatus = 'pending' | 'clear';
 
 export const SERVICE_OPTIONS = [
   'Water tank',
-  'Sofa',
+  'Dry clean',
   'Chimney',
   'Kitchen',
   'Home cleaning',
   'Bathroom',
+] as const;
+
+export const DRY_CLEAN_ITEMS = [
+  { key: 'Sofa Seat', label: 'Sofa Seat' },
+  { key: 'Cushion', label: 'Cushion' },
+  { key: 'Dining Chair', label: 'Dining Chair' },
+  { key: 'Sofa Cum Bed', label: 'Sofa Cum Bed' },
+  { key: 'Mattress', label: 'Mattress' },
+  { key: 'Puffy', label: 'Puffy' },
+  { key: 'Table', label: 'Table' },
+  { key: 'Chair', label: 'Chair' },
 ] as const;
 
 export interface CleanerProfile {

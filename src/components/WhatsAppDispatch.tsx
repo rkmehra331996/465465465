@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Check,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Languages,
   Loader2,
@@ -16,6 +18,24 @@ import {
 } from '../lib/api';
 import { IndianDateInput } from './IndianDateInput';
 import type { Order, TranslateTarget } from '../types';
+
+function localTodayStr(offsetDays = 0): string {
+  const d = new Date(Date.now() + offsetDays * 86400000);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function shiftIsoDate(isoDate: string, deltaDays: number): string {
+  const base = /^\d{4}-\d{2}-\d{2}$/.test(isoDate) ? isoDate : localTodayStr(0);
+  const [y, m, d] = base.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + deltaDays);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
 
 interface WhatsAppDispatchProps {
   orders: Order[];
@@ -64,6 +84,10 @@ export const WhatsAppDispatch: React.FC<WhatsAppDispatchProps> = ({
     }
     return Array.from(map.values()).sort((a, b) => b.count - a.count);
   }, [activeOrders]);
+
+  const today = localTodayStr(0);
+  const yesterday = localTodayStr(-1);
+  const tomorrow = localTodayStr(1);
 
   const [selectedCleaner, setSelectedCleaner] = useState<string>(
     initialCleaner || cleanerSummaries[0]?.name || 'all'
@@ -246,19 +270,94 @@ export const WhatsAppDispatch: React.FC<WhatsAppDispatchProps> = ({
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Filter by Date (Optional)
-              </label>
-              <IndianDateInput
-                ariaLabel="Filter by booking date"
-                title="Filter by Date (DD/MM/YY)"
-                value={dateFilter}
-                onChange={setDateFilter}
-                allowClear
-                className="w-full py-0.5 rounded-lg"
-              />
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <label className="text-xs font-semibold text-slate-700">
+                  Filter by Date
+                </label>
+                <span className="text-[11px] font-mono-num font-semibold text-[#075E54]">
+                  {dateFilter ? formatIndianDate(dateFilter) : 'All Dates'}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                {(() => {
+                  const backDateTarget = dateFilter ? shiftIsoDate(dateFilter, -1) : yesterday;
+                  const nextDateTarget = dateFilter ? shiftIsoDate(dateFilter, 1) : tomorrow;
+                  const backDay = backDateTarget.slice(8, 10);
+                  const todayDay = today.slice(8, 10);
+                  const nextDay = nextDateTarget.slice(8, 10);
+
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setDateFilter(backDateTarget)}
+                        title={`Back to ${formatIndianDate(backDateTarget)}`}
+                        className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg border inline-flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap ${
+                          dateFilter && dateFilter < today
+                            ? 'bg-[#075E54] text-white border-[#075E54]'
+                            : 'bg-[#F7F9F8] text-slate-800 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                        }`}
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                        Back Date ({backDay})
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setDateFilter(today)}
+                        title={`Today (${formatIndianDate(today)})`}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
+                          dateFilter === today
+                            ? 'bg-purple-800 text-white border-purple-900 ring-2 ring-purple-300'
+                            : 'bg-purple-600 text-white border-purple-700 hover:bg-purple-700'
+                        }`}
+                      >
+                        Today ({todayDay})
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setDateFilter(nextDateTarget)}
+                        title={`Next to ${formatIndianDate(nextDateTarget)}`}
+                        className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg border inline-flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap ${
+                          dateFilter && dateFilter > today
+                            ? 'bg-[#075E54] text-white border-[#075E54]'
+                            : 'bg-[#F7F9F8] text-slate-800 border-[#DCE4E0] hover:bg-[#EFF4F1]'
+                        }`}
+                      >
+                        Next Date ({nextDay})
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  );
+                })()}
+
+                <button
+                  type="button"
+                  onClick={() => setDateFilter('')}
+                  className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
+                    !dateFilter
+                      ? 'bg-[#128C7E] text-white border-[#128C7E]'
+                      : 'bg-white text-slate-700 border-[#DCE4E0] hover:bg-[#F7F9F8]'
+                  }`}
+                >
+                  All
+                </button>
+
+                <div className="flex-1 min-w-[116px]">
+                  <IndianDateInput
+                    ariaLabel="Filter by booking date"
+                    title="Filter by Date (DD/MM/YY)"
+                    value={dateFilter}
+                    onChange={setDateFilter}
+                    allowClear
+                    className="w-full py-0.5 rounded-lg"
+                  />
+                </div>
+              </div>
             </div>
 
             <div>

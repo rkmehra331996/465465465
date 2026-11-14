@@ -62,6 +62,7 @@ export default function App() {
   const [ordersLoading, setOrdersLoading] = useState<boolean>(false);
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('active');
+  const [vendorsResetKey, setVendorsResetKey] = useState<number>(0);
   const [calcOpen, setCalcOpen] = useState<boolean>(false);
   const [newOrderOpen, setNewOrderOpen] = useState<boolean>(false);
   const [dispatchCleaner, setDispatchCleaner] = useState<string | undefined>(undefined);
@@ -322,7 +323,10 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() => setActiveTab('todays_vendors')}
+              onClick={() => {
+                setActiveTab('todays_vendors');
+                setVendorsResetKey((k) => k + 1);
+              }}
               className={`px-3 py-1 rounded-md text-xs sm:text-sm font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
                 activeTab === 'todays_vendors'
                   ? 'bg-red-600 text-white ring-2 ring-white shadow-sm'
@@ -461,6 +465,7 @@ export default function App() {
 
         {activeTab === 'todays_vendors' && (
           <TodaysActiveVendors
+            key={vendorsResetKey}
             orders={orders}
             config={config}
             currentUser={user}
